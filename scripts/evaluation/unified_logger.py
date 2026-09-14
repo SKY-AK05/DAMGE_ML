@@ -47,7 +47,7 @@ class DualWriter:
         return self.stream.fileno()
 
 class UnifiedLogger:
-    def __init__(self, output_dir, model_name, patience=5):
+    def __init__(self, output_dir, model_name, patience=15):
         self.output_dir = Path(output_dir)
         self.model_name = model_name
         self.patience = patience
@@ -122,7 +122,10 @@ class UnifiedLogger:
         """
         print(f"\nEpoch {epoch}/{total_epochs}")
         print(f"|-- Train Loss: {train_stats.get('train_loss', 0):.4f}")
-        print(f"|-- Val Loss:   {train_stats.get('val_loss', 0):.4f}")
+        # val_loss is float('nan') for inference-only validation (Mask2Former)
+        _val_loss = train_stats.get('val_loss', float('nan'))
+        _val_loss_str = f"{_val_loss:.4f}" if _val_loss == _val_loss else "N/A"  # nan != nan
+        print(f"|-- Val Loss:   {_val_loss_str}")
         for k, v in train_stats.items():
             if k not in ['train_loss', 'val_loss', 'lr', 'gpu_mem_gb', 'epoch_time_sec', 'images_sec']:
                 print(f"|-- {k}: {v:.4f}")
@@ -248,7 +251,9 @@ class UnifiedLogger:
         print(f"  Best epoch:            {self.best_epoch}")
         print(f"  Total training time:   {total_time_min:.1f} min")
         print(f"  Final train loss:      {ts.get('train_loss', 0):.4f}")
-        print(f"  Final validation loss: {ts.get('val_loss', 0):.4f}")
+        _vl = ts.get('val_loss', float('nan'))
+        _vl_str = f"{_vl:.4f}" if _vl == _vl else "N/A"
+        print(f"  Final validation loss: {_vl_str}")
         
         print("\nDetection")
         print(f"  Precision:             {vm.get('precision_box', 0):.4f}")

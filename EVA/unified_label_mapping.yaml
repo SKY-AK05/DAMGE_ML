@@ -1,0 +1,82 @@
+final_categories:
+  1:  wheel
+  2:  wheel_cap
+  3:  front_left_light
+  4:  front_right_light
+  5:  door_glass
+  6:  left_mirror
+  7:  right_mirror
+  8:  front_bumper
+  9:  grille
+  10: front_left_door
+  11: front_right_door
+  12: hood
+  13: pillar
+  14: back_left_door
+  15: back_right_door
+  16: front_glass
+  17: front_left_fender
+  18: front_right_fender
+  19: back_left_light
+  20: back_right_light
+  21: rear_quarter_panel
+  22: roof
+  23: side_skirt_rocker_panel
+  24: fog_lamp
+  25: back_bumper
+  26: indicator
+  27: number_plate
+  28: back_glass
+  29: tailgate
+  30: fuel_lid
+  31: antenna
+  32: trunk
+
+source_1_cvat_xml:
+  direct_mapping:          # no Position attribute needed
+    Wheel: wheel
+    Wheel Cap: wheel_cap
+    Door Glass: door_glass
+    Front Bumper: front_bumper
+    Grille: grille
+    Bonnet: hood
+    Pillar: pillar
+    Windscreen: front_glass
+    Rear Quarter Panel: rear_quarter_panel
+    Roof: roof
+    Side Skirt / Rocker Panel: side_skirt_rocker_panel
+    Fog Lamp: fog_lamp
+    Rear Bumper: back_bumper
+    Indicator: indicator
+    Number Plate: number_plate
+    Rear Windscreen: back_glass
+    Trunk Lid: tailgate
+    Fuel Lid: fuel_lid
+    Antenna: antenna
+
+  position_split_mapping:  # requires <attribute name="Position">Left|Right</attribute>
+    Headlamp:
+      Left: front_left_light
+      Right: front_right_light
+    ORVM:
+      Left: left_mirror
+      Right: right_mirror
+    Front Door:
+      Left: front_left_door
+      Right: front_right_door
+      Front-Left: front_left_door
+      Front-Right: front_right_door
+    Rear Door:
+      Left: back_left_door
+      Right: back_right_door
+      Rear-Left: back_left_door
+      Rear-Right: back_right_door
+    Front Fender:
+      Left: front_left_fender
+      Right: front_right_fender
+    Taillight:
+      Left: back_left_light
+      Right: back_right_light
+
+  on_missing_or_unexpected_position:
+    action: log_unresolved

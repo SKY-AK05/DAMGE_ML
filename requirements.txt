@@ -32,6 +32,7 @@ azureml-dataprep
 transformers
 pandas
 openpyxl
+wandb
 
 # Dataset preprocessing utilities
 imagesize==1.4.1      # header-only image dimension reads — no pixel decode

@@ -239,31 +239,72 @@ class UnifiedEvaluator:
         lr_mixup_rate = mixup_errors / mixup_total if mixup_total > 0 else 0.0
 
         # Calculate Per-class AP
-        # COCOeval stores results in eval['precision'] -> shape [T, R, K, A, M]
-        # K is category
+        # COCOeval stores eval['precision'] with shape [T, R, K, A, M] and
+        # eval['recall'] with shape [T, K, A, M].  The K dimension is indexed by
+        # the position of category_id within coco_eval_mask.params.catIds — which
+        # is NOT necessarily the same order as sorted_cat_ids.  We must build a
+        # cat_id → K-index map from the actual COCOeval params to avoid reading
+        # the wrong column and getting all-zero / misaligned per-class numbers.
         per_class_metrics = {}
-        for i, cat_id in enumerate(sorted_cat_ids):
+        has_eval_dict = hasattr(coco_eval_mask, 'eval') and coco_eval_mask.eval
+        if has_eval_dict:
+            coco_cat_ids = list(coco_eval_mask.params.catIds)  # COCOeval's canonical order
+            cat_id_to_k = {cid: k for k, cid in enumerate(coco_cat_ids)}
+        for cat_id in sorted_cat_ids:
             c_name = self.cat_id_to_name[cat_id]
-            # mAP50 is at IoU=0.5, all area, maxDets=100
-            # precision array: [iouThrs, recThrs, catIds, areaRng, maxDets]
-            # iouThrs=0 is 0.5. recThrs=all. areaRng=0 is all. maxDets=2 is 100.
-            prec = coco_eval_mask.eval['precision'][0, :, i, 0, 2]
-            ap50 = np.mean(prec[prec > -1]) if len(prec[prec > -1]) > 0 else 0
-            
-            # mAP50-95 is mean over all iouThrs
-            prec_all = coco_eval_mask.eval['precision'][:, :, i, 0, 2]
-            ap5095 = np.mean(prec_all[prec_all > -1]) if len(prec_all[prec_all > -1]) > 0 else 0
-            
-            # Simple precision and recall (approximate)
-            # COCO doesn't give a single P/R easily, but we can extract it for IoU=0.5
-            scores = coco_eval_mask.eval['scores'][0, :, i, 0, 2]
-            # Just store APs for now
+            if not has_eval_dict or cat_id not in cat_id_to_k:
+                per_class_metrics[c_name] = {'map50': 0, 'map5095': 0, 'precision': 0, 'recall': 0}
+                continue
+            k_idx = cat_id_to_k[cat_id]
+            # precision shape: [iouThrs, recThrs, catIds, areaRng, maxDets]
+            # iouThrs index 0 = IoU 0.50; areaRng index 0 = all; maxDets index 2 = 100
+            prec = coco_eval_mask.eval['precision'][0, :, k_idx, 0, 2]
+            ap50 = float(np.mean(prec[prec > -1])) if (prec > -1).any() else 0.0
+
+            prec_all = coco_eval_mask.eval['precision'][:, :, k_idx, 0, 2]
+            ap5095 = float(np.mean(prec_all[prec_all > -1])) if (prec_all > -1).any() else 0.0
+
+            # recall shape: [iouThrs, catIds, areaRng, maxDets]
+            rec_val = coco_eval_mask.eval['recall'][0, k_idx, 0, 2]
+            recall = float(rec_val) if rec_val > -1 else 0.0
+
+            # Per-class precision: the precision value at the rightmost valid
+            # point on the IoU=0.50 P-R curve (i.e. at the highest recall
+            # threshold that has a valid entry).  This gives a true precision
+            # figure that is independent of mAP50.
+            valid_mask = prec > -1
+            if valid_mask.any():
+                # recThrs are uniformly spaced [0, 0.01, ..., 1.0]; the
+                # rightmost valid index corresponds to the highest achieved recall.
+                rightmost_valid_idx = int(np.where(valid_mask)[0][-1])
+                precision_at_op = float(prec[rightmost_valid_idx])
+            else:
+                precision_at_op = 0.0
+
             per_class_metrics[c_name] = {
                 'map50': ap50,
                 'map5095': ap5095,
-                'precision': ap50, # Rough proxy
-                'recall': np.mean(coco_eval_mask.eval['recall'][0, i, 0, 2]) if coco_eval_mask.eval['recall'].shape[0] > 0 else 0
+                'precision': precision_at_op,  # real per-class precision from P-R curve
+                'recall': recall,
             }
+
+        # Save per-class metrics JSON
+        per_class_path = self.output_dir / "per_class_metrics.json"
+        try:
+            with open(per_class_path, "w", encoding="utf-8") as f:
+                json.dump(per_class_metrics, f, indent=2)
+        except Exception as _e:
+            print(f"[!] Warning: Could not save per_class_metrics.json: {_e}")
+
+        # Highlight low precision (< 0.40) and low recall (< 0.40) classes
+        weak_recall = [name for name, m in per_class_metrics.items() if m.get("recall", 0) < 0.40]
+        low_precision = [name for name, m in per_class_metrics.items() if m.get("precision", 0) < 0.40]
+        if weak_recall or low_precision:
+            print("\n[Per-Class Health Check]")
+            if weak_recall:
+                print(f"  [!] Weak Recall (<0.40): {', '.join(weak_recall[:8])}" + (f" (+{len(weak_recall)-8} more)" if len(weak_recall) > 8 else ""))
+            if low_precision:
+                print(f"  [!] Low Precision (<0.40): {', '.join(low_precision[:8])}" + (f" (+{len(low_precision)-8} more)" if len(low_precision) > 8 else ""))
 
         # Save Visualizations
         self._save_visualizations(epoch, predictions_by_image_id)
@@ -272,20 +313,38 @@ class UnifiedEvaluator:
         avg_dice = total_dice / matched_instances if matched_instances > 0 else 0
         avg_boundary_iou = total_boundary_iou / matched_instances if matched_instances > 0 else 0
 
-        # COCO stats arrays
-        # [0] = AP @ IoU=0.50:0.95, area=all, maxDets=100
-        # [1] = AP @ IoU=0.50, area=all, maxDets=100
-        # [8] = AR @ IoU=0.50:0.95, area=all, maxDets=100
         stats_box = coco_eval_box.stats
         stats_mask = coco_eval_mask.stats
 
+        # COCO stats[] layout:
+        #  [0] AP @ IoU 0.50:0.95 (all)   → mAP50-95
+        #  [1] AP @ IoU 0.50               → mAP50
+        #  [2] AP @ IoU 0.75
+        #  [8] AR @ maxDets=100            → mean recall
+        # Global precision: take the mean of the per-class precision values
+        # computed above from the P-R curves, which are already correct.
+        global_prec_box = float(np.mean([
+            float(coco_eval_box.eval['precision'][0, :, cat_id_to_k[cid], 0, 2][
+                coco_eval_box.eval['precision'][0, :, cat_id_to_k[cid], 0, 2] > -1
+            ][-1])
+            if (coco_eval_box.eval['precision'][0, :, cat_id_to_k[cid], 0, 2] > -1).any() else 0.0
+            for cid in sorted_cat_ids if cid in cat_id_to_k
+        ])) if sorted_cat_ids and has_eval_dict else stats_box[0]
+        global_prec_mask = float(np.mean([
+            float(coco_eval_mask.eval['precision'][0, :, cat_id_to_k[cid], 0, 2][
+                coco_eval_mask.eval['precision'][0, :, cat_id_to_k[cid], 0, 2] > -1
+            ][-1])
+            if (coco_eval_mask.eval['precision'][0, :, cat_id_to_k[cid], 0, 2] > -1).any() else 0.0
+            for cid in sorted_cat_ids if cid in cat_id_to_k
+        ])) if sorted_cat_ids and has_eval_dict else stats_mask[0]
+
         metrics = {
-            'precision_box': stats_box[0], # Using AP as proxy for global precision
-            'recall_box': stats_box[8],    # Using AR as proxy for global recall
+            'precision_box': global_prec_box,
+            'recall_box': stats_box[8],    # AR @ maxDets=100
             'map50_box': stats_box[1],
-            'map5095_box': stats_box[0],
-            
-            'precision_mask': stats_mask[0],
+            'map5095_box': stats_box[0],   # fixed: was also stats_box[0] but now correctly labelled
+
+            'precision_mask': global_prec_mask,
             'recall_mask': stats_mask[8],
             'map50_mask': stats_mask[1],
             'map5095_mask': stats_mask[0],

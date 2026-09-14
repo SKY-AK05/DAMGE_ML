@@ -79,13 +79,24 @@ DSMLR_TO_TARGET = {
     "wheel":            22,
 }
 
+# 32-class taxonomy — matches combined_data/unified_categories.yaml
 NAMES = {
-    0:"back_bumper", 1:"back_door",      2:"back_glass",      3:"back_left_door",
-    4:"back_left_light", 5:"back_light", 6:"back_right_door", 7:"back_right_light",
-    8:"front_bumper",    9:"front_door", 10:"front_glass",    11:"front_left_door",
-    12:"front_left_light",13:"front_light",14:"front_right_door",15:"front_right_light",
-    16:"hood",17:"left_mirror",18:"object",19:"right_mirror",
-    20:"tailgate",21:"trunk",22:"wheel",
+    0:  "wheel",                   1:  "wheel_cap",
+    2:  "front_left_light",        3:  "front_right_light",
+    4:  "door_glass",              5:  "left_mirror",
+    6:  "right_mirror",            7:  "front_bumper",
+    8:  "grille",                  9:  "front_left_door",
+    10: "front_right_door",        11: "hood",
+    12: "pillar",                  13: "back_left_door",
+    14: "back_right_door",         15: "front_glass",
+    16: "front_left_fender",       17: "front_right_fender",
+    18: "back_left_light",         19: "back_right_light",
+    20: "rear_quarter_panel",      21: "roof",
+    22: "side_skirt_rocker_panel", 23: "fog_lamp",
+    24: "back_bumper",             25: "indicator",
+    26: "number_plate",            27: "back_glass",
+    28: "tailgate",                29: "fuel_lid",
+    30: "antenna",                 31: "trunk",
 }
 
 

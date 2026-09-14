@@ -56,6 +56,12 @@ import time
 from pathlib import Path
 from ultralytics import YOLO
 
+try:
+    import wandb
+    _WANDB_AVAILABLE = True
+except ImportError:
+    _WANDB_AVAILABLE = False
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 import sys
 sys.path.append(str(PROJECT_ROOT))
@@ -129,6 +135,13 @@ def main():
     parser.add_argument("--val_interval", type=int, default=5,
                         help="Run unified COCO eval every N epochs (default: 5). "
                              "Use 1 to evaluate every epoch. Note: YOLO's own val still runs every epoch.")
+    # ── W&B args (new — do not conflict with any existing args) ────────────
+    parser.add_argument("--wandb_project", default="car-damage-parts-seg",
+                        help="W&B project name (default: 'car-damage-parts-seg').")
+    parser.add_argument("--wandb_run_name", default=None,
+                        help="Optional W&B run display name. Auto-generated if not set.")
+    parser.add_argument("--no_wandb", action="store_true", default=False,
+                        help="Disable W&B logging entirely.")
     args, _ = parser.parse_known_args()
 
     cache_arg = False if args.cache == "none" else args.cache
@@ -192,6 +205,35 @@ def main():
     logger = UnifiedLogger(target_out_dir, args.model)
     logger.print_dataset_health(train_json, val_json)
     evaluator = UnifiedEvaluator(val_json, val_images, class_names, target_out_dir)
+
+    # ── W&B init (before training starts) ───────────────────────────────
+    _use_wandb = _WANDB_AVAILABLE and not args.no_wandb
+    if _use_wandb:
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config={
+                "model": args.model,
+                "dataset": args.dataset,
+                "epochs": args.epochs,
+                "imgsz": args.imgsz,
+                "batch_size": args.batch,
+                "workers": args.workers,
+                "cache": args.cache,
+                "val_interval": args.val_interval,
+                "device": str(device),
+                "output_dir": target_out_dir,
+                "num_classes": len(class_names),
+                "class_names": class_names,
+            },
+        )
+        print(f"[OK] W&B run initialised: {wandb.run.url}")
+    elif not _WANDB_AVAILABLE and not args.no_wandb:
+        print("[WARNING] wandb not installed — W&B logging disabled. "
+              "Install with: pip install wandb")
+
+    # ── best metric tracker for completion alert ──────────────────────────
+    _best_val_metric_str = "N/A"
 
     def custom_eval_callback(trainer):
         epoch = trainer.epoch + 1
@@ -269,6 +311,26 @@ def main():
             
         should_stop, is_best = logger.log_epoch(epoch, trainer.epochs, train_stats, val_metrics)
         
+        # ── W&B per-epoch logging ────────────────────────────────────────
+        if _use_wandb:
+            _wandb_log = {
+                "epoch": epoch,
+                "train/loss": train_stats["train_loss"],
+                "train/lr":        train_stats["lr"],
+                "train/gpu_mem_gb": train_stats["gpu_mem_gb"],
+            }
+            if run_unified and val_metrics:
+                for _k, _v in val_metrics.items():
+                    try:
+                        _wandb_log[f"val/{_k}"] = float(_v)
+                    except (TypeError, ValueError):
+                        pass
+                # Track best metric for completion alert
+                _ap = val_metrics.get("AP", val_metrics.get("mAP", None))
+                if _ap is not None:
+                    _best_val_metric_str = f"AP={float(_ap):.4f}"
+            wandb.log(_wandb_log, step=epoch)
+
         if run_unified and should_stop:
             print(f"\n[!] Early stopping triggered by unified evaluator.")
             trainer.stop = True
@@ -293,8 +355,32 @@ def main():
     if args.max_batches:
         train_kwargs["time"] = 0.005 # ~18s max for quick micro-benchmark
 
-    model.train(**train_kwargs)
+    try:
+        model.train(**train_kwargs)
+    except Exception as _exc:
+        print(f"[ERROR] YOLO training crashed: {_exc}")
+        if _use_wandb:
+            wandb.alert(
+                title="YOLO Training Crashed",
+                text=f"Exception: {type(_exc).__name__}: {_exc}",
+                level=wandb.AlertLevel.ERROR,
+            )
+            wandb.finish(exit_code=1)
+        raise
+
     logger.print_final_summary()
+
+    # ── W&B completion alert + finish ───────────────────────────────────────
+    if _use_wandb:
+        wandb.alert(
+            title="YOLO Training Complete",
+            text=(
+                f"Training finished after {args.epochs} epoch(s).\n"
+                f"Best validation metric: {_best_val_metric_str}\n"
+                f"Output dir: {target_out_dir}"
+            ),
+        )
+        wandb.finish()
 
     best_weights_path = os.path.join(target_out_dir, "weights", "best.pt")
     last_weights_path = os.path.join(target_out_dir, "weights", "last.pt")

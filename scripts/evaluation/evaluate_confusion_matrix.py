@@ -18,24 +18,56 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+# 32-class taxonomy — matches combined_data/unified_categories.yaml (COCO IDs 1-32 → list index 0-31)
 CARPARTS_SEG_CLASSES = [
-    "back_bumper", "back_door", "back_glass", "back_left_door", "back_left_light",
-    "back_light", "back_right_door", "back_right_light", "front_bumper", "front_door",
-    "front_glass", "front_left_door", "front_left_light", "front_light", "front_right_door",
-    "front_right_light", "hood", "left_mirror", "object", "right_mirror", "tailgate",
-    "trunk", "wheel",
+    "wheel",                   # 0  (COCO 1)
+    "wheel_cap",               # 1  (COCO 2)
+    "front_left_light",        # 2  (COCO 3)
+    "front_right_light",       # 3  (COCO 4)
+    "door_glass",              # 4  (COCO 5)
+    "left_mirror",             # 5  (COCO 6)
+    "right_mirror",            # 6  (COCO 7)
+    "front_bumper",            # 7  (COCO 8)
+    "grille",                  # 8  (COCO 9)
+    "front_left_door",         # 9  (COCO 10)
+    "front_right_door",        # 10 (COCO 11)
+    "hood",                    # 11 (COCO 12)
+    "pillar",                  # 12 (COCO 13)
+    "back_left_door",          # 13 (COCO 14)
+    "back_right_door",         # 14 (COCO 15)
+    "front_glass",             # 15 (COCO 16)
+    "front_left_fender",       # 16 (COCO 17)
+    "front_right_fender",      # 17 (COCO 18)
+    "back_left_light",         # 18 (COCO 19)
+    "back_right_light",        # 19 (COCO 20)
+    "rear_quarter_panel",      # 20 (COCO 21)
+    "roof",                    # 21 (COCO 22)
+    "side_skirt_rocker_panel", # 22 (COCO 23)
+    "fog_lamp",                # 23 (COCO 24)
+    "back_bumper",             # 24 (COCO 25)
+    "indicator",               # 25 (COCO 26)
+    "number_plate",            # 26 (COCO 27)
+    "back_glass",              # 27 (COCO 28)
+    "tailgate",                # 28 (COCO 29)
+    "fuel_lid",                # 29 (COCO 30)
+    "antenna",                 # 30 (COCO 31)
+    "trunk",                   # 31 (COCO 32)
 ]
 
 # Pairs we specifically care about mixing up (this is the real question being tested)
 CONFUSION_PAIRS_TO_WATCH = [
-    ("front_left_door", "back_left_door"),
-    ("front_right_door", "back_right_door"),
-    ("front_left_door", "front_right_door"),
-    ("back_left_door", "back_right_door"),
-    ("front_left_light", "front_right_light"),
-    ("back_left_light", "back_right_light"),
-    ("left_mirror", "right_mirror"),
+    ("front_left_door",    "back_left_door"),
+    ("front_right_door",   "back_right_door"),
+    ("front_left_door",    "front_right_door"),
+    ("back_left_door",     "back_right_door"),
+    ("front_left_light",   "front_right_light"),
+    ("back_left_light",    "back_right_light"),
+    ("left_mirror",        "right_mirror"),
+    ("front_left_fender",  "front_right_fender"),
+    ("front_left_light",   "back_left_light"),
+    ("front_right_light",  "back_right_light"),
 ]
+
 
 
 def box_iou(box_a, box_b):
@@ -113,7 +145,7 @@ def get_predictions_maskrcnn(weights_path, test_images_dir, test_json_path, clas
     return preds_by_image
 
 
-def get_predictions_mask2former(weights_path, test_images_dir, test_json_path, class_names):
+def get_predictions_mask2former(weights_path, test_images_dir, test_json_path, class_names, conf_threshold=0.5):
     import torch
     from PIL import Image
     from transformers import Mask2FormerForUniversalSegmentation, Mask2FormerImageProcessor
@@ -138,6 +170,8 @@ def get_predictions_mask2former(weights_path, test_images_dir, test_json_path, c
 
         preds = []
         for seg in result.get("segments_info", []):
+            if seg.get("score", 0.0) < conf_threshold:
+                continue
             mask = (result["segmentation"] == seg["id"]).cpu().numpy()
             ys, xs = np.where(mask)
             if len(xs) == 0:

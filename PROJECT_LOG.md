@@ -391,3 +391,39 @@ With the architecture question settled, the project returns to Stage 2:\nrunning
 - Known bug fixed: orchestrator was passing `--output_dir` to `train_yolo_seg.py`,
   which only accepts `--project`. Fixed in `orchestrator/src/main.rs` line ~327.
 
+---
+
+## 12. Dataset Analytics Multi-Sheet Excel Export — 2026-09
+
+**Feature Addition:** Added comprehensive dataset analytics export to multi-sheet Excel workbooks (`.xlsx`).
+
+**Key capabilities added:**
+- **Dedicated Exporter Utility:** `scripts/data/export_dataset_analytics.py` parses dataset annotations and split layouts (`coco_*.json` or YOLO text labels) and extracts original source origins (`raw`, `matched_carparts-seg`, `matched_dsmlr`, etc.) from image filename prefixes.
+- **Multi-Sheet Workbook Layout:**
+  1. `Overview & Summary`: High-level metrics, split image/annotation counts, source overview, and overall class distribution.
+  2. `Class Matrix`: Full breakdown of annotation counts per category across `train`, `val`, and `test` splits.
+  3. `Src - <source_name>`: Dedicated worksheet for every dataset source with source-specific split summaries and class distributions.
+- **Orchestrator Integration:** `analyze_dataset()` in `orchestrator.py` automatically generates and saves `<dataset_name>_analytics.xlsx` whenever Dataset Analytics (Option 5) is run, reporting the file path in the terminal.
+
+---
+
+## 13. Combined Dataset CVAT XML Export & ZIP Archive — 2026-09
+
+**Feature Addition:** Added dataset export to CVAT XML 1.1 format with automated ZIP packaging.
+
+**Key capabilities added:**
+- **Exporter Utility:** `scripts/data/export_dataset_xml.py` converts all combined dataset splits (`train`, `val`, `test`) into a single `combined_annotations.xml` file matching the CVAT XML 1.1 format of `RAW_DATASET/01_orchvate_custom/XML/combined_annotations.xml`.
+- **Image Consolidation & ZIP Packaging:** Copies all combined images (~5.6k to 7k) into `<output_dir>/images/` and compresses the entire package into a `.zip` archive.
+- **Orchestrator Integration:** Added dedicated Main Menu option `6) Export CVAT XML & ZIP` in `orchestrator.py` (menu choices 1–11).
+
+---
+
+## 14. Taxonomy Refinement: Front Fender Inclusion & 100% Raw Coverage — 2026-09
+
+**Taxonomy Update:** 
+- Promoted `front_fender` (1,055 annotations in `01_orchvate_custom`) into a dedicated target class (`front_fender`: Class ID 10 in 24-class taxonomy).
+- Added mapping aliases for `wheel_cap` (2,213), `pillar` (1,298), and `antenna` (296) to `object` in `prepare_raw_dataset.py` and `remap_github_labels.py`.
+
+**Key changes made:**
+- **Zero Skipped Annotations:** **100% of all 29,870 annotations** in `RAW_DATASET/01_orchvate_custom/XML/combined_annotations.xml` are now preserved and converted (0 skipped).
+- **Analytics Regeneration:** Re-processed raw dataset and refreshed `combined_carparts_analytics.xlsx` multi-sheet Excel report.

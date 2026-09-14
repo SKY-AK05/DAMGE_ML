@@ -26,13 +26,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATASETS     = PROJECT_ROOT / "datasets"
 LOGS_DIR     = PROJECT_ROOT / "logs"
 
+# 32-class taxonomy — matches combined_data/unified_categories.yaml (list index = COCO ID - 1)
 NAMES = [
-    "back_bumper", "back_door", "back_glass", "back_left_door", "back_left_light",
-    "back_light", "back_right_door", "back_right_light", "front_bumper", "front_door",
-    "front_glass", "front_left_door", "front_left_light", "front_light", "front_right_door",
-    "front_right_light", "hood", "left_mirror", "object", "right_mirror",
-    "tailgate", "trunk", "wheel",
+    "wheel", "wheel_cap", "front_left_light", "front_right_light", "door_glass",
+    "left_mirror", "right_mirror", "front_bumper", "grille", "front_left_door",
+    "front_right_door", "hood", "pillar", "back_left_door", "back_right_door",
+    "front_glass", "front_left_fender", "front_right_fender", "back_left_light",
+    "back_right_light", "rear_quarter_panel", "roof", "side_skirt_rocker_panel",
+    "fog_lamp", "back_bumper", "indicator", "number_plate", "back_glass",
+    "tailgate", "fuel_lid", "antenna", "trunk",
 ]
+
 
 
 # ── Dataset helpers ─────────────────────────────────────────────────────────

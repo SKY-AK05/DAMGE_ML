@@ -39,30 +39,62 @@ from datetime import datetime, timezone
 from pathlib import Path
 from PIL import Image
 
+# 32-class taxonomy — matches combined_data/unified_categories.yaml (COCO IDs 1-32 → list index 0-31)
 CARPARTS_SEG_CLASSES = [
-    "back_bumper", "back_door", "back_glass", "back_left_door", "back_left_light",
-    "back_light", "back_right_door", "back_right_light", "front_bumper", "front_door",
-    "front_glass", "front_left_door", "front_left_light", "front_light", "front_right_door",
-    "front_right_light", "hood", "left_mirror", "object", "right_mirror", "tailgate",
-    "trunk", "wheel",
+    "wheel",                   # 0  (COCO 1)
+    "wheel_cap",               # 1  (COCO 2)
+    "front_left_light",        # 2  (COCO 3)
+    "front_right_light",       # 3  (COCO 4)
+    "door_glass",              # 4  (COCO 5)
+    "left_mirror",             # 5  (COCO 6)
+    "right_mirror",            # 6  (COCO 7)
+    "front_bumper",            # 7  (COCO 8)
+    "grille",                  # 8  (COCO 9)
+    "front_left_door",         # 9  (COCO 10)
+    "front_right_door",        # 10 (COCO 11)
+    "hood",                    # 11 (COCO 12)
+    "pillar",                  # 12 (COCO 13)
+    "back_left_door",          # 13 (COCO 14)
+    "back_right_door",         # 14 (COCO 15)
+    "front_glass",             # 15 (COCO 16)
+    "front_left_fender",       # 16 (COCO 17)
+    "front_right_fender",      # 17 (COCO 18)
+    "back_left_light",         # 18 (COCO 19)
+    "back_right_light",        # 19 (COCO 20)
+    "rear_quarter_panel",      # 20 (COCO 21)
+    "roof",                    # 21 (COCO 22)
+    "side_skirt_rocker_panel", # 22 (COCO 23)
+    "fog_lamp",                # 23 (COCO 24)
+    "back_bumper",             # 24 (COCO 25)
+    "indicator",               # 25 (COCO 26)
+    "number_plate",            # 26 (COCO 27)
+    "back_glass",              # 27 (COCO 28)
+    "tailgate",                # 28 (COCO 29)
+    "fuel_lid",                # 29 (COCO 30)
+    "antenna",                 # 30 (COCO 31)
+    "trunk",                   # 31 (COCO 32)
 ]
 
 COLORS = [
-    (255, 99, 71), (60, 179, 113), (65, 105, 225), (255, 215, 0), (218, 112, 214),
-    (0, 206, 209), (255, 140, 0), (154, 205, 50), (199, 21, 133), (30, 144, 255),
-    (255, 20, 147), (34, 139, 34), (255, 69, 0), (147, 112, 219), (0, 191, 255),
-    (220, 20, 60), (46, 139, 87), (255, 165, 0), (138, 43, 226), (0, 250, 154),
-    (255, 105, 180), (72, 61, 139), (240, 230, 140),
+    (255, 99, 71),   (60, 179, 113),  (65, 105, 225),  (255, 215, 0),   (218, 112, 214),
+    (0, 206, 209),   (255, 140, 0),   (154, 205, 50),  (199, 21, 133),  (30, 144, 255),
+    (255, 20, 147),  (34, 139, 34),   (255, 69, 0),    (147, 112, 219), (0, 191, 255),
+    (220, 20, 60),   (46, 139, 87),   (255, 165, 0),   (138, 43, 226),  (0, 250, 154),
+    (255, 105, 180), (72, 61, 139),   (240, 230, 140), (210, 105, 30),  (127, 255, 0),
+    (255, 0, 127),   (0, 128, 128),   (255, 215, 180), (100, 149, 237), (255, 99, 132),
+    (50, 205, 50),   (186, 85, 211),
 ]
 
 
 def mask_to_polygon(mask, epsilon_ratio=0.005):
     mask_uint8 = mask.astype(np.uint8) * 255
-    contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    kernel = np.ones((3, 3), np.uint8)
+    mask_cleaned = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(mask_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
     largest = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(largest) < 30:
+    if cv2.contourArea(largest) < 40:
         return None
     peri = cv2.arcLength(largest, True)
     approx = cv2.approxPolyDP(largest, epsilon_ratio * peri, True)
@@ -70,6 +102,36 @@ def mask_to_polygon(mask, epsilon_ratio=0.005):
     if len(pts) < 3:
         return None
     return pts
+
+
+def suppress_overlapping_masks(items, iou_thresh=0.50):
+    """
+    Suppresses redundant overlapping detections.
+    items: list of dicts each containing 'mask', 'score', ...
+    Returns filtered list of items sorted by confidence.
+    """
+    if not items:
+        return []
+    sorted_items = sorted(items, key=lambda x: x["score"], reverse=True)
+    kept = []
+    for candidate in sorted_items:
+        cand_mask = candidate["mask"]
+        cand_area = cand_mask.sum()
+        if cand_area == 0:
+            continue
+        overlap = False
+        for prev in kept:
+            prev_mask = prev["mask"]
+            inter = np.logical_and(cand_mask, prev_mask).sum()
+            if inter > 0:
+                union = np.logical_or(cand_mask, prev_mask).sum()
+                iou = inter / union if union > 0 else 0
+                if iou > iou_thresh:
+                    overlap = True
+                    break
+        if not overlap:
+            kept.append(candidate)
+    return kept
 
 
 def points_to_cvat_str(pts):
@@ -213,21 +275,35 @@ def run_mask2former(input_dir, output_dir, weights_path, class_names, conf):
 
         image_el = ET.SubElement(root, "image", id=str(img_id), name=fname, width=str(w), height=str(h))
         overlay = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        detections_found = 0
-
+        raw_items = []
         for seg in result.get("segments_info", []):
             label_id = seg["label_id"]
             score = seg.get("score", 1.0)
-            if label_id >= len(class_names):
+            if label_id >= len(class_names) or score < conf:
                 continue
-            label_name = class_names[label_id]
 
             mask = (result["segmentation"] == seg["id"]).cpu().numpy()
             pts = mask_to_polygon(mask)
             if pts is None:
                 continue
 
-            detections_found += 1
+            raw_items.append({
+                "label_id": label_id,
+                "score": score,
+                "mask": mask,
+                "pts": pts,
+                "label_name": class_names[label_id]
+            })
+
+        items = suppress_overlapping_masks(raw_items, iou_thresh=0.50)
+        detections_found = len(items)
+
+        for item in items:
+            label_id = item["label_id"]
+            label_name = item["label_name"]
+            score = item["score"]
+            pts = item["pts"]
+
             color = COLORS[label_id % len(COLORS)]
             cv2.polylines(overlay, [pts.astype(np.int32)], True, color, 2)
             label_pos = tuple(pts[0].astype(int))
@@ -326,33 +402,41 @@ def run_maskrcnn(input_dir, output_dir, weights_path, class_names, conf):
 
 def _default_yolo_weights():
     """Find the most recent YOLO weights file."""
-    # First, check if last_yolo_weights_path.txt exists and the path is valid
     if os.path.exists("last_yolo_weights_path.txt"):
         with open("last_yolo_weights_path.txt") as f:
             path = f.read().strip()
             if os.path.exists(path):
                 return path
-            # Path in file doesn't exist, fall through to search
-    
-    # Search for the most recent YOLO weights in runs_comparison
+
     runs_dir = Path("runs_comparison")
     if runs_dir.exists():
-        # Find all best.pt files in yolo11m-seg subdirectories
         weight_files = list(runs_dir.glob("**/yolo11m-seg*/weights/best.pt")) + list(runs_dir.glob("**/yolo11m-seg*/best.pt"))
         if not weight_files:
             weight_files = list(runs_dir.glob("run_*/yolo11*-seg/*/weights/best.pt"))
         
         if weight_files:
-            # Sort by modification time, return most recent
             weight_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
             return str(weight_files[0])
-    
-    # Final fallback
+
+    mlflow_weights = list(Path("runs/mlflow").glob("**/weights/best.pt")) if Path("runs/mlflow").exists() else []
+    if mlflow_weights:
+        mlflow_weights.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return str(mlflow_weights[0])
+
+    if os.path.exists("yolo11m-seg.pt"):
+        return "yolo11m-seg.pt"
+
     return "runs_comparison/yolo11m-seg/weights/best.pt"
 
 
 def _default_mask2former_weights():
     """Find the most recent Mask2Former weights directory."""
+    if os.path.exists("last_m2f_weights_path.txt"):
+        with open("last_m2f_weights_path.txt") as f:
+            path = f.read().strip()
+            if os.path.exists(path):
+                return path
+
     runs_dir = Path("runs_comparison")
     if runs_dir.exists():
         model_dirs = [p.parent for p in runs_dir.glob("**/mask2former*/weights/best/model.safetensors")]
@@ -364,19 +448,39 @@ def _default_mask2former_weights():
         if model_dirs:
             model_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
             return str(model_dirs[0])
-    
+
+    runs_dir = Path("runs")
+    if runs_dir.exists():
+        model_dirs = [p.parent for p in runs_dir.glob("**/mask2former*/model.safetensors")]
+        if model_dirs:
+            model_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return str(model_dirs[0])
+
     return "runs_comparison/mask2former/weights/best"
 
 
 def _default_maskrcnn_weights():
     """Find the most recent Mask R-CNN weights file."""
+    if os.path.exists("last_mrcnn_weights_path.txt"):
+        with open("last_mrcnn_weights_path.txt") as f:
+            path = f.read().strip()
+            if os.path.exists(path):
+                return path
+
     runs_dir = Path("runs_comparison")
     if runs_dir.exists():
         weight_files = list(runs_dir.glob("**/maskrcnn*/weights/best.pt")) + list(runs_dir.glob("**/maskrcnn*/best_model.pt"))
         if weight_files:
             weight_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
             return str(weight_files[0])
-    
+
+    runs_dir = Path("runs")
+    if runs_dir.exists():
+        weight_files = list(runs_dir.glob("**/maskrcnn*/best*.pt"))
+        if weight_files:
+            weight_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return str(weight_files[0])
+
     return "runs_comparison/maskrcnn/weights/best.pt"
 
 
@@ -387,7 +491,7 @@ def main():
     parser.add_argument("--yolo_weights", default=_default_yolo_weights())
     parser.add_argument("--mask2former_weights", default=_default_mask2former_weights())
     parser.add_argument("--maskrcnn_weights", default=_default_maskrcnn_weights())
-    parser.add_argument("--conf", type=float, default=0.5)
+    parser.add_argument("--conf", type=float, default=0.55)
     parser.add_argument("--skip_yolo", action="store_true")
     parser.add_argument("--skip_mask2former", action="store_true")
     parser.add_argument("--skip_maskrcnn", action="store_true")
@@ -398,25 +502,40 @@ def main():
     ran = []
 
     if not args.skip_yolo:
-        yolo_out = os.path.join(args.output, "yolo")
-        os.makedirs(yolo_out, exist_ok=True)
-        run_yolo(args.input, yolo_out, args.yolo_weights, class_names, args.conf)
-        ran.append("yolo")
+        if not os.path.exists(args.yolo_weights):
+            print(f"\n[!] Skipping YOLO inference: weights file not found at '{args.yolo_weights}'")
+        else:
+            yolo_out = os.path.join(args.output, "yolo")
+            os.makedirs(yolo_out, exist_ok=True)
+            run_yolo(args.input, yolo_out, args.yolo_weights, class_names, args.conf)
+            ran.append("yolo")
 
     if not args.skip_mask2former:
-        m2f_out = os.path.join(args.output, "mask2former")
-        os.makedirs(m2f_out, exist_ok=True)
-        run_mask2former(args.input, m2f_out, args.mask2former_weights, class_names, args.conf)
-        ran.append("mask2former")
+        if not os.path.exists(args.mask2former_weights):
+            print(f"\n[!] Skipping Mask2Former inference: weights directory not found at '{args.mask2former_weights}'")
+        else:
+            m2f_out = os.path.join(args.output, "mask2former")
+            os.makedirs(m2f_out, exist_ok=True)
+            run_mask2former(args.input, m2f_out, args.mask2former_weights, class_names, args.conf)
+            ran.append("mask2former")
 
     if not args.skip_maskrcnn:
-        mrcnn_out = os.path.join(args.output, "maskrcnn")
-        os.makedirs(mrcnn_out, exist_ok=True)
-        run_maskrcnn(args.input, mrcnn_out, args.maskrcnn_weights, class_names, args.conf)
-        ran.append("maskrcnn")
+        if not os.path.exists(args.maskrcnn_weights):
+            print(f"\n[!] Skipping Mask R-CNN inference: weights file not found at '{args.maskrcnn_weights}'")
+        else:
+            mrcnn_out = os.path.join(args.output, "maskrcnn")
+            os.makedirs(mrcnn_out, exist_ok=True)
+            run_maskrcnn(args.input, mrcnn_out, args.maskrcnn_weights, class_names, args.conf)
+            ran.append("maskrcnn")
 
     print("\n" + "=" * 60)
-    print(f" DONE. Results saved under: {args.output}/" + f"  and  {args.output}/".join(ran))
+    if ran:
+        print(f" DONE. Results saved under: {args.output}/" + f"  and  {args.output}/".join(ran))
+    else:
+        print("[!] No models were executed because no valid weights files were found.")
+        print("    Please ensure trained model weights exist or pass valid paths via CLI.")
+        import sys
+        sys.exit(1)
     print("=" * 60)
 
 

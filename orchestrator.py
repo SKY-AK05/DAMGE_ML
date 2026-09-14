@@ -62,17 +62,20 @@ def display_main_menu():
     print("======================================================================")
     print("        Car-Parts Segmentation -- Interactive Python Orchestrator       ")
     print("======================================================================")
-    print("  1) Train Models Locally   -- Prepare dataset, train models & generate comparison")
-    print("  2) Compare Models         -- Compare metrics, curves, plots & multi-sheet Excel")
-    print("  3) Test on Trained Model  -- Run inference on test images using trained weights")
-    print("  4) Auto-Prepare Dataset   -- Match taxonomy, combine sources, generate COCO JSON")
-    print("  5) Dataset Analytics      -- View image counts, total annotations, & class breakdown")
-    print("  6) Preprocess Tools       -- Standalone tools (yolo_to_coco, combine, verify, hash)")
-    print("  7) GPU Capacity Check     -- Stepwise batch size & worker stress tester")
-    print("  8) Train on Azure ML      -- Submit GPU job to Azure ML (Single / All / Dry-run)")
-    print("  9) Cleanup Pipeline       -- Wipe stale outputs interactively (safe, keeps raw/)")
-    print("  10) Exit")
+    print("  1)  Train Models Locally   -- Prepare dataset, train models & generate comparison")
+    print("  2)  Compare Models         -- Compare metrics, curves, plots & multi-sheet Excel")
+    print("  3)  Test on Trained Model  -- Run inference on test images using trained weights")
+    print("  4)  Auto-Prepare Dataset   -- Match taxonomy, combine sources, generate COCO JSON")
+    print("  5)  Dataset Analytics      -- View image counts, total annotations, & class breakdown")
+    print("  6)  Export CVAT XML & ZIP  -- Export combined dataset -> CVAT XML 1.1 & ZIP package (~7k images)")
+    print("  7)  Preprocess Tools       -- Standalone tools (yolo_to_coco, combine, verify, hash)")
+    print("  8)  GPU Capacity Check     -- Stepwise batch size & worker stress tester")
+    print("  9)  Train on Azure ML      -- Submit GPU job to Azure ML (Single / All / Dry-run)")
+    print("  10) Cleanup Pipeline       -- Wipe stale outputs interactively (safe, keeps raw/)")
+    print("  11) Exit")
+    print("  12) Best Model Analytics   -- Auto-find best run, deep per-class analysis & export bundle")
     print("======================================================================")
+
 
 class ModelSelection:
     def __init__(self, yolo=False, maskrcnn=False, mask2former=False):
@@ -156,13 +159,13 @@ class Hyperparams:
             mrcnn_default_b = get_default_batch("maskrcnn", 2)
             mrcnn_default_w = get_default_workers("maskrcnn", 4)
             print("\n---- Mask R-CNN ----")
-            self.mrcnn_epochs       = prompt_int("Epochs", 20)
+            self.mrcnn_epochs       = prompt_int("Epochs", 30)
             self.mrcnn_batch        = prompt_int("Batch size", mrcnn_default_b)
             self.mrcnn_workers      = prompt_int("Dataloader workers", mrcnn_default_w)
             self.mrcnn_val_interval = prompt_int("Validate every N epochs", 5)
             self.mrcnn_accum_steps  = prompt_int("Gradient accumulation steps", 4)
         else:
-            self.mrcnn_epochs       = 20
+            self.mrcnn_epochs       = 30
             self.mrcnn_batch        = get_default_batch("maskrcnn", 2)
             self.mrcnn_workers      = get_default_workers("maskrcnn", 4)
             self.mrcnn_val_interval = 5
@@ -173,19 +176,25 @@ class Hyperparams:
             m2f_default_b = get_default_batch("mask2former", 2)
             m2f_default_w = get_default_workers("mask2former", 4)
             print("\n---- Mask2Former (Swin Transformer) ----")
-            self.m2f_epochs       = prompt_int("Epochs", 20)
+            self.m2f_epochs       = prompt_int("Epochs", 30)
             self.m2f_batch        = prompt_int("Batch size", m2f_default_b)
             self.m2f_workers      = prompt_int("Dataloader workers", m2f_default_w)
             self.m2f_val_interval = prompt_int("Validate every N epochs", 5)
             self.m2f_accum_steps  = prompt_int("Gradient accumulation steps", 4)
+            _no_obj               = prompt("  no_object_weight penalty [default: 0.25, range 0.20-0.30]: ") or "0.25"
+            try:
+                self.m2f_no_obj_weight = float(_no_obj)
+            except ValueError:
+                self.m2f_no_obj_weight = 0.25
             _compile_ans          = prompt("  Use --compile (torch.compile)? [y/N]: ")
             self.m2f_compile      = _compile_ans.strip().lower() in ("y", "yes")
         else:
-            self.m2f_epochs       = 20
+            self.m2f_epochs       = 30
             self.m2f_batch        = get_default_batch("mask2former", 2)
             self.m2f_workers      = get_default_workers("mask2former", 4)
             self.m2f_val_interval = 5
             self.m2f_accum_steps  = 4
+            self.m2f_no_obj_weight = 0.25
             self.m2f_compile      = False
 
         # ── Summary ───────────────────────────────────────────────────────────
@@ -357,9 +366,10 @@ def interactive_cleanup_prompt():
 def prompt_dataset_sources():
     """
     Ask user which dataset sources to include in training.
-    Returns: (use_raw, use_external)
+    Returns: (use_raw, use_external, combined_data_path)
       - use_raw: bool - include RAW_DATASET (custom carparts)
       - use_external: bool - include external datasets (carparts-seg, dsmlr)
+      - combined_data_path: str or None - path to combined_data/ pre-cleaned COCO dir
     """
     print()
     print("======================================================================")
@@ -368,21 +378,30 @@ def prompt_dataset_sources():
     print("  1) RAW_DATASET only (your custom annotated data)")
     print("  2) External datasets only (carparts-seg + dsmlr from GitHub)")
     print("  3) BOTH (RAW_DATASET + External datasets) [DEFAULT - RECOMMENDED]")
+    print("  4) combined_data  (pre-cleaned COCO, 32 classes — Mask2Former only)")
     print("======================================================================")
     print("  NOTE: Selecting BOTH gives ~5689 images vs ~1455 for RAW only")
     print("        External datasets are cached — no re-download if already present")
+    print("  NOTE: combined_data skips dataset prep entirely (already cleaned).")
+    print("        YOLO training is skipped for combined_data (COCO-only format).")
     print("======================================================================")
-    choice = prompt("Enter choice [1-3] (press Enter for 3 - BOTH): ") or "3"
+    choice = prompt("Enter choice [1-4] (press Enter for 3 - BOTH): ") or "3"
 
     if choice == "1":
         print("  [Selected] RAW_DATASET only (1,455 images)")
-        return True, False
+        return True, False, None
     elif choice == "2":
         print("  [Selected] External datasets only")
-        return False, True
+        return False, True, None
+    elif choice == "4":
+        _combined_path = str(PROJECT_ROOT / "RAW_DATASET" / "combined_data")
+        print(f"  [Selected] combined_data (pre-cleaned COCO, 32 classes)")
+        print(f"             Path: {_combined_path}")
+        print("  [NOTE] YOLO training will be SKIPPED for this dataset source.")
+        return False, False, _combined_path
     else:  # choice == "3" or default
         print("  [Selected] BOTH datasets (~5,689 images)")
-        return True, True
+        return True, True, None
 
 
 def ensure_and_prepare_datasets(logs_dir, use_raw=True, use_external=True):
@@ -398,13 +417,21 @@ def ensure_and_prepare_datasets(logs_dir, use_raw=True, use_external=True):
     os.makedirs(datasets_dir, exist_ok=True)
     log_path = os.path.join(logs_dir, "01_smart_dataset_prep.log")
 
-    # Step 1: RAW_DATASET -> datasets/raw/ (only if selected)
+    # Step 1: RAW_DATASET/01_orchvate_custom -> datasets/raw/ (only if selected)
+    # RAW_DATASET is the permanent safe storage. We copy/process from it — never modify it.
     if use_raw:
-        raw_images = PROJECT_ROOT / "RAW_DATASET" / "IMAGES"
-        raw_xmls   = PROJECT_ROOT / "RAW_DATASET" / "XML"
+        orchvate_dir = PROJECT_ROOT / "RAW_DATASET" / "01_orchvate_custom"
+        raw_images = orchvate_dir / "IMAGES"
+        raw_xmls   = orchvate_dir / "XML"
         if raw_images.exists() and any(raw_images.iterdir()) and raw_xmls.exists() and any(raw_xmls.iterdir()):
-            print("[*] Found RAW_DATASET — converting XML annotations to YOLO format...")
-            run_cmd_and_log(["python", "scripts/data/prepare_raw_dataset.py"], log_path, "raw_prep")
+            print("[*] Found RAW_DATASET/01_orchvate_custom — converting XML annotations to YOLO format...")
+            run_cmd_and_log(
+                ["python", "scripts/data/prepare_raw_dataset.py",
+                 "--raw-dir", str(orchvate_dir)],
+                log_path, "raw_prep"
+            )
+        else:
+            print(f"[WARN] RAW_DATASET/01_orchvate_custom not found or empty — skipping custom data.")
 
         raw_dir = datasets_dir / "raw"
         if not raw_dir.exists() or not any((raw_dir / "images").rglob("*.*") if (raw_dir / "images").exists() else []):
@@ -451,11 +478,13 @@ def ensure_and_prepare_datasets(logs_dir, use_raw=True, use_external=True):
                     zf.extractall(temp_dir)
                 zip_file.unlink(missing_ok=True)
 
-                # The zip contains a top-level carparts-seg/ folder
-                extracted = temp_dir / "carparts-seg"
-                if not extracted.exists():
-                    # Fallback: find any subdirectory
-                    candidates = [d for d in temp_dir.iterdir() if d.is_dir()]
+                # Check if extracted directly into temp_dir or inside a subfolder
+                if (temp_dir / "carparts-seg").exists():
+                    extracted = temp_dir / "carparts-seg"
+                elif (temp_dir / "images").exists() or (temp_dir / "labels").exists():
+                    extracted = temp_dir
+                else:
+                    candidates = [d for d in temp_dir.iterdir() if d.is_dir() and ((d / "images").exists() or (d / "labels").exists())]
                     extracted = candidates[0] if candidates else temp_dir
 
                 # Move to final destination
@@ -550,7 +579,7 @@ def ensure_and_prepare_datasets(logs_dir, use_raw=True, use_external=True):
     print("\n[OK] Dataset preparation complete. Training set: './datasets/combined_carparts'")
     return "combined_carparts"
 
-def analyze_dataset(dataset_name="combined_carparts"):
+def analyze_dataset(dataset_name="combined_carparts", output_dir=None):
     ds_path = PROJECT_ROOT / "datasets" / dataset_name
     if not ds_path.exists():
         print(f"[ERROR] Dataset directory '{ds_path}' does not exist.")
@@ -603,6 +632,17 @@ def analyze_dataset(dataset_name="combined_carparts"):
             pct = (count / total_annotations * 100) if total_annotations > 0 else 0
             print(f"  {name:<28} | {count:>12} | {pct:>9.2f}%")
         print(" ---------------------------------------------------------------------")
+
+    # Export multi-sheet Excel report
+    try:
+        from scripts.data.export_dataset_analytics import export_analytics_excel
+        excel_path = export_analytics_excel(ds_path, output_path=output_dir)
+        if excel_path:
+            print(f"\n[OK] Dataset Analytics Excel Report saved to:")
+            print(f"     {excel_path}")
+    except Exception as e:
+        print(f"\n[WARN] Could not export Excel report: {e}")
+
 
 def _generate_report(run_config_path, logs_dir):
     try:
@@ -720,7 +760,7 @@ def main():
             f.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
 
     display_main_menu()
-    choice = prompt("Enter choice [1-10]: ")
+    choice = prompt("Enter choice [1-12]: ")
     log_selection("Main Menu", f"Option {choice}")
 
     if choice == "1":
@@ -728,7 +768,7 @@ def main():
         models = collect_models()
         hparams = Hyperparams(models)
         # Ask user which dataset sources to use
-        use_raw, use_external = prompt_dataset_sources()
+        use_raw, use_external, combined_data_path = prompt_dataset_sources()
 
         # Log all user selections
         model_list = []
@@ -736,7 +776,7 @@ def main():
         if models.maskrcnn: model_list.append("maskrcnn")
         if models.mask2former: model_list.append("mask2former")
         log_selection("Models selected", ", ".join(model_list) if model_list else "none")
-        log_selection("Dataset sources", f"use_raw={use_raw}, use_external={use_external}")
+        log_selection("Dataset sources", f"use_raw={use_raw}, use_external={use_external}, combined_data={combined_data_path}")
         if models.yolo:
             log_selection("YOLO hyperparams", f"epochs={hparams.yolo_epochs}, batch={hparams.yolo_batch}, workers={hparams.yolo_workers}")
         if models.maskrcnn:
@@ -744,38 +784,63 @@ def main():
         if models.mask2former:
             log_selection("Mask2Former hyperparams", f"epochs={hparams.m2f_epochs}, batch={hparams.m2f_batch}, workers={hparams.m2f_workers}, accum={hparams.m2f_accum_steps}")
 
-        dataset = ensure_and_prepare_datasets(logs_dir, use_raw, use_external)
+        if combined_data_path:
+            # combined_data mode: skip normal dataset prep entirely
+            print(f"\n[*] combined_data mode — skipping dataset prep (already cleaned).")
+            dataset = combined_data_path  # used only for eval/logging; Mask2Former uses --combined_data
+        else:
+            dataset = ensure_and_prepare_datasets(logs_dir, use_raw, use_external)
         run_config_path = save_run_config(logs_dir, "Train Models Locally", dataset, models, hparams)
         _generate_report(run_config_path, logs_dir)
 
         if models.yolo:
-            log_path = os.path.join(logs_dir, "02_train_yolo.log")
-            out_dir = os.path.join(base_out_dir, "yolo11m-seg")
-            cmd = ["python", "scripts/training/train_yolo_seg.py", "--model", "yolo11m-seg",
-                   "--dataset", dataset, "--epochs", str(hparams.yolo_epochs),
-                   "--batch", str(hparams.yolo_batch), "--workers", str(hparams.yolo_workers),
-                   "--val_interval", str(hparams.yolo_val_interval),
-                   "--output_dir", out_dir]
-            run_cmd_and_log(cmd, log_path, "train_yolo")
+            if combined_data_path:
+                print("[INFO] Skipping YOLO training — combined_data is COCO format only "
+                      "(no YOLO .txt labels available). Use option 1/2/3 for YOLO training.")
+            else:
+                log_path = os.path.join(logs_dir, "02_train_yolo.log")
+                out_dir = os.path.join(base_out_dir, "yolo11m-seg")
+                cmd = ["python", "scripts/training/train_yolo_seg.py", "--model", "yolo11m-seg",
+                       "--dataset", dataset, "--epochs", str(hparams.yolo_epochs),
+                       "--batch", str(hparams.yolo_batch), "--workers", str(hparams.yolo_workers),
+                       "--val_interval", str(hparams.yolo_val_interval),
+                       "--output_dir", out_dir]
+                run_cmd_and_log(cmd, log_path, "train_yolo")
 
         if models.maskrcnn:
-            log_path = os.path.join(logs_dir, "03_train_maskrcnn.log")
-            out_dir = os.path.join(base_out_dir, "maskrcnn")
-            cmd = ["python", "scripts/training/train_maskrcnn.py", "--dataset", dataset,
-                   "--epochs", str(hparams.mrcnn_epochs), "--batch", str(hparams.mrcnn_batch),
-                   "--num_workers", str(hparams.mrcnn_workers), "--output_dir", out_dir,
-                   "--val_interval", str(hparams.mrcnn_val_interval),
-                   "--accum_steps", str(hparams.mrcnn_accum_steps)]
-            run_cmd_and_log(cmd, log_path, "train_maskrcnn")
+            if combined_data_path:
+                print("[INFO] Skipping Mask R-CNN training for combined_data mode.")
+            else:
+                log_path = os.path.join(logs_dir, "03_train_maskrcnn.log")
+                out_dir = os.path.join(base_out_dir, "maskrcnn")
+                cmd = ["python", "scripts/training/train_maskrcnn.py", "--dataset", dataset,
+                       "--epochs", str(hparams.mrcnn_epochs), "--batch", str(hparams.mrcnn_batch),
+                       "--num_workers", str(hparams.mrcnn_workers), "--output_dir", out_dir,
+                       "--val_interval", str(hparams.mrcnn_val_interval),
+                       "--accum_steps", str(hparams.mrcnn_accum_steps)]
+                run_cmd_and_log(cmd, log_path, "train_maskrcnn")
 
         if models.mask2former:
             log_path = os.path.join(logs_dir, "04_train_mask2former.log")
             out_dir = os.path.join(base_out_dir, "mask2former")
-            cmd = ["python", "scripts/training/train_mask2former.py", "--dataset", dataset,
-                   "--epochs", str(hparams.m2f_epochs), "--batch", str(hparams.m2f_batch),
-                   "--num_workers", str(hparams.m2f_workers), "--output_dir", out_dir,
-                   "--val_interval", str(hparams.m2f_val_interval),
-                   "--accum_steps", str(hparams.m2f_accum_steps)]
+            if combined_data_path:
+                # Pass combined_data path directly; --dataset is still required by argparse
+                # so we pass a dummy value that won't be used when --combined_data is set.
+                cmd = ["python", "scripts/training/train_mask2former.py",
+                       "--dataset", "combined_data_placeholder",
+                       "--combined_data", combined_data_path,
+                       "--epochs", str(hparams.m2f_epochs), "--batch", str(hparams.m2f_batch),
+                       "--num_workers", str(hparams.m2f_workers), "--output_dir", out_dir,
+                       "--val_interval", str(hparams.m2f_val_interval),
+                       "--accum_steps", str(hparams.m2f_accum_steps),
+                       "--no_object_weight", str(getattr(hparams, "m2f_no_obj_weight", 0.25))]
+            else:
+                cmd = ["python", "scripts/training/train_mask2former.py", "--dataset", dataset,
+                       "--epochs", str(hparams.m2f_epochs), "--batch", str(hparams.m2f_batch),
+                       "--num_workers", str(hparams.m2f_workers), "--output_dir", out_dir,
+                       "--val_interval", str(hparams.m2f_val_interval),
+                       "--accum_steps", str(hparams.m2f_accum_steps),
+                       "--no_object_weight", str(getattr(hparams, "m2f_no_obj_weight", 0.25))]
             if hparams.m2f_compile:
                 cmd.append("--compile")
             run_cmd_and_log(cmd, log_path, "train_mask2former")
@@ -806,12 +871,88 @@ def main():
 
     elif choice == "3":
         print("\n[TASK] Test on Trained Model (Inference)")
-        inp = prompt_default("Test images directory", "./test")
+
+        try:
+            from scripts.inference.infer_both_models import (
+                _default_yolo_weights,
+                _default_mask2former_weights,
+                _default_maskrcnn_weights,
+            )
+            yolo_w = _default_yolo_weights()
+            m2f_w = _default_mask2former_weights()
+            mrcnn_w = _default_maskrcnn_weights()
+        except Exception:
+            yolo_w = "runs_comparison/yolo11m-seg/weights/best.pt"
+            m2f_w = "runs_comparison/mask2former/weights/best"
+            mrcnn_w = "runs_comparison/maskrcnn/weights/best.pt"
+
+        yolo_found = os.path.exists(yolo_w)
+        m2f_found = os.path.exists(m2f_w)
+        mrcnn_found = os.path.exists(mrcnn_w)
+
+        print("\nDetected Model Weights:")
+        print(f"  - YOLOv11m-seg : {yolo_w} [{'FOUND' if yolo_found else 'NOT FOUND'}]")
+        print(f"  - Mask2Former  : {m2f_w} [{'FOUND' if m2f_found else 'NOT FOUND'}]")
+        print(f"  - Mask R-CNN   : {mrcnn_w} [{'FOUND' if mrcnn_found else 'NOT FOUND'}]")
+        print()
+
+        default_test_dir = "./test_data" if os.path.exists("./test_data") else "./test"
+        inp = prompt_default("Test images directory", default_test_dir)
         out = prompt_default("Output directory", "./test_result")
-        conf = prompt_default("Confidence threshold", "0.40")
+        conf = prompt_default("Confidence threshold", "0.55")
+
+        print("\nSelect Model(s) to Run:")
+        print("  1) All Available Models (auto-skip missing weights) [Default]")
+        print("  2) Mask2Former only")
+        print("  3) YOLOv11m-seg only")
+        print("  4) Mask R-CNN only")
+        print("  5) Custom weights selection")
+        m_choice = prompt("Enter choice [1-5] (default 1): ") or "1"
+
+        cmd = ["python", "scripts/inference/infer_both_models.py", "--input", inp, "--output", out, "--conf", conf]
+
+        if m_choice == "2":
+            cmd.extend(["--skip_yolo", "--skip_maskrcnn"])
+            if m2f_w:
+                cmd.extend(["--mask2former_weights", m2f_w])
+        elif m_choice == "3":
+            cmd.extend(["--skip_mask2former", "--skip_maskrcnn"])
+            if yolo_w:
+                cmd.extend(["--yolo_weights", yolo_w])
+        elif m_choice == "4":
+            cmd.extend(["--skip_yolo", "--skip_mask2former"])
+            if mrcnn_w:
+                cmd.extend(["--maskrcnn_weights", mrcnn_w])
+        elif m_choice == "5":
+            use_yolo = prompt("  Run YOLO? [y/N]: ").strip().lower() in ("y", "yes")
+            if use_yolo:
+                yw = prompt_default("  YOLO weights path", yolo_w)
+                cmd.extend(["--yolo_weights", yw])
+            else:
+                cmd.append("--skip_yolo")
+
+            use_m2f = prompt("  Run Mask2Former? [y/N]: ").strip().lower() in ("y", "yes")
+            if use_m2f:
+                mw = prompt_default("  Mask2Former weights dir", m2f_w)
+                cmd.extend(["--mask2former_weights", mw])
+            else:
+                cmd.append("--skip_mask2former")
+
+            use_mrcnn = prompt("  Run Mask R-CNN? [y/N]: ").strip().lower() in ("y", "yes")
+            if use_mrcnn:
+                rw = prompt_default("  Mask R-CNN weights path", mrcnn_w)
+                cmd.extend(["--maskrcnn_weights", rw])
+            else:
+                cmd.append("--skip_maskrcnn")
+        else:
+            if yolo_w:
+                cmd.extend(["--yolo_weights", yolo_w])
+            if m2f_w:
+                cmd.extend(["--mask2former_weights", m2f_w])
+            if mrcnn_w:
+                cmd.extend(["--maskrcnn_weights", mrcnn_w])
 
         log_path = os.path.join(logs_dir, "01_inference.log")
-        cmd = ["python", "scripts/inference/infer_both_models.py", "--input", inp, "--output", out, "--conf", conf]
         run_cmd_and_log(cmd, log_path, "inference")
 
     elif choice == "4":
@@ -822,21 +963,33 @@ def main():
         run_config_path = save_run_config(logs_dir, "Auto-Prepare Dataset", combined_name)
         _generate_report(run_config_path, logs_dir)
         print(f"\n[OK] Dataset ready in './datasets/{combined_name}'!")
-        analyze_dataset(combined_name)
+        analyze_dataset(combined_name, output_dir=base_out_dir)
 
     elif choice == "5":
         print("\n[TASK] Dataset Analytics")
         ds = prompt_default("Dataset name (under ./datasets)", "combined_carparts")
-        analyze_dataset(ds)
+        analyze_dataset(ds, output_dir=base_out_dir)
 
     elif choice == "6":
+        print("\n[TASK] Export CVAT XML & ZIP Package")
+        ds = prompt_default("Dataset name (under ./datasets)", "combined_carparts")
+        out_dir = prompt_default("Output folder", os.path.join(base_out_dir, f"{ds}_xml"))
+        log_path = os.path.join(logs_dir, "export_cvat_xml.log")
+        cmd = ["python", "scripts/data/export_dataset_xml.py", "--dataset", ds, "--out_dir", out_dir]
+        run_cmd_and_log(cmd, log_path, "export_dataset_xml")
+        print(f"\n[OK] CVAT XML export & ZIP package completed!")
+        print(f"     Folder: {out_dir}")
+        print(f"     ZIP   : {out_dir}.zip")
+
+    elif choice == "7":
         print("\n[TASK] Dataset Preprocessing Tools")
         print("  a) yolo_to_coco    -- Convert YOLO polygons -> COCO JSON (parallel)")
         print("  b) combine         -- Merge multiple YOLO datasets (parallel copy)")
         print("  c) verify_labels   -- Scan for corrupt images (report-only)")
         print("  d) hash_dataset    -- Write blake3 checksums manifest")
         print("  e) auto_annotate   -- Auto-annotate images (Grounding DINO + SAM2)")
-        sub = prompt("Enter sub-option [a-e]: ")
+        print("  f) export_xml      -- Export combined dataset -> CVAT XML 1.1 & ZIP archive")
+        sub = prompt("Enter sub-option [a-f]: ")
         if sub == "a":
             ds = prompt_default("Dataset", "combined_carparts")
             workers = prompt_default("Workers", "8")
@@ -864,10 +1017,19 @@ def main():
             log_path = os.path.join(logs_dir, "01_annotation.log")
             cmd = ["python", "scripts/inference/auto_annotate_carparts.py", "--input", inp, "--output", out]
             run_cmd_and_log(cmd, log_path, "annotation")
+        elif sub == "f":
+            ds = prompt_default("Dataset name (under ./datasets)", "combined_carparts")
+            out_dir = prompt_default("Output folder", os.path.join(base_out_dir, f"{ds}_xml"))
+            log_path = os.path.join(logs_dir, "preprocess_export_xml.log")
+            cmd = ["python", "scripts/data/export_dataset_xml.py", "--dataset", ds, "--out_dir", out_dir]
+            run_cmd_and_log(cmd, log_path, "export_dataset_xml")
+            print(f"\n[OK] CVAT XML export & ZIP package completed!")
+            print(f"     Folder: {out_dir}")
+            print(f"     ZIP   : {out_dir}.zip")
         else:
             print(f"[ERROR] Unknown sub-option '{sub}'")
 
-    elif choice == "7":
+    elif choice == "8":
         print("\n[TASK] GPU Capacity Check")
         mode = prompt_default("Run mode (local / azure)", "local")
         ds = prompt_default("Dataset path", "./datasets/combined_carparts")
@@ -875,7 +1037,7 @@ def main():
         cmd = ["python", "scripts/training/capacity_check.py", "--dataset", ds, "--mode", mode]
         run_cmd_and_log(cmd, log_path, "capacity_check")
 
-    elif choice == "8":
+    elif choice == "9":
         print("\n[TASK] Train on Azure ML")
         is_dryrun = prompt("  Run 3-epoch quick pipeline check (dry run)? [y/N] (default: n): ").lower() in ("y", "yes")
         local_dir = prompt_default("Local dataset directory", "./datasets/combined_carparts")
@@ -912,7 +1074,7 @@ def main():
                            "--batch", str(hparams.m2f_batch), "--workers", str(hparams.m2f_workers), "--auto_upload"]
                     run_cmd_and_log(cmd, os.path.join(logs_dir, "00_azure_train_mask2former.log"), "azure_train_mask2former")
 
-    elif choice == "9":
+    elif choice == "10":
         print("\n[TASK] Cleanup Pipeline")
         import importlib.util
         _spec = importlib.util.spec_from_file_location(
@@ -923,9 +1085,142 @@ def main():
         _spec.loader.exec_module(_mod)
         _mod.main()
 
-    elif choice == "10":
+    elif choice == "11":
         print("Exiting.")
         sys.exit(0)
+
+    elif choice == "12":
+        print()
+        print("======================================================================")
+        print(" Best Model Analytics -- Deep Per-Class Analysis & Export Bundle")
+        print("======================================================================")
+        print("  Scans all runs_comparison/ folders, finds the best trained model")
+        print("  by highest mask mAP50, then generates:")
+        print("    * Per-part mAP50 bar chart  (colour-coded green/amber/red tiers)")
+        print("    * Radar chart               (precision vs recall per class)")
+        print("    * Precision/Recall heatmap  (grid: class x metric)")
+        print("    * Score distribution chart  (mAP50 vs mAP50-95 per part)")
+        print("    * Ranked parts CSV          (sorted by mAP50)")
+        print("    * Test inference results    (annotated images from test_data/)")
+        print("    * analytics_summary.xlsx    (4-sheet Excel workbook)")
+        print("    * Full export bundle        (weights + plots + comparison Excel)")
+        print("======================================================================")
+        print()
+
+        # ── Run selection ──────────────────────────────────────────────────────
+        runs_dir = PROJECT_ROOT / "runs_comparison"
+        print("  [A] Run selection:")
+        print("    1) Auto-detect best run across ALL runs_comparison/ folders [Default]")
+        print("    2) Pick a specific run folder manually")
+        run_sel = prompt("  Enter choice [1-2] (default 1): ") or "1"
+
+        target_run_dir  = None
+        target_model_dir = None
+
+        if run_sel == "2":
+            # List available runs
+            avail_runs = sorted(
+                [d for d in runs_dir.iterdir() if d.is_dir() and d.name.startswith("run_")]
+            ) if runs_dir.exists() else []
+            if not avail_runs:
+                print("[ERROR] No run folders found in runs_comparison/")
+            else:
+                print()
+                print("  Available runs:")
+                for idx, rd in enumerate(avail_runs, 1):
+                    # Try to read best score for display
+                    score_str = ""
+                    for md in rd.iterdir():
+                        bm = md / "best_metrics.json" if md.is_dir() else None
+                        if bm and bm.exists():
+                            try:
+                                with open(bm, "r", encoding="utf-8") as _f:
+                                    _d = json.load(_f)
+                                vm = _d.get("val_metrics", {})
+                                s = vm.get("map50_mask", vm.get("map50_box",
+                                    _d.get("best_mask_map50", 0.0)))
+                                score_str = f"  [mAP50={s:.4f}  model={md.name}]"
+                            except Exception:
+                                pass
+                    print(f"    {idx:>2}) {rd.name}{score_str}")
+                print()
+                run_idx_str = prompt(f"  Enter run number [1-{len(avail_runs)}]: ")
+                try:
+                    run_idx = int(run_idx_str) - 1
+                    if 0 <= run_idx < len(avail_runs):
+                        target_run_dir = avail_runs[run_idx]
+                        print(f"  [Selected] {target_run_dir.name}")
+                    else:
+                        print("[WARN] Invalid selection — using auto-detect.")
+                except ValueError:
+                    print("[WARN] Invalid input — using auto-detect.")
+
+        # ── Inference options ──────────────────────────────────────────────────
+        default_test = str(PROJECT_ROOT / "test_data")
+        print()
+        skip_inf_ans = prompt("  Run test-image inference? [Y/n] (default: y): ").strip().lower()
+        skip_inference = skip_inf_ans in ("n", "no")
+
+        test_images_path = default_test
+        conf_val = "0.35"
+        if not skip_inference:
+            test_images_path = prompt_default("  Test images directory", default_test)
+            conf_val = prompt_default("  Inference confidence threshold", "0.35")
+
+        # ── Output directory ───────────────────────────────────────────────────
+        if target_run_dir:
+            default_out = str(target_run_dir / "analytics_export")
+        else:
+            default_out = "<auto — inside best run folder>/analytics_export"
+        print()
+        print(f"  Output will be saved to: {default_out}")
+        custom_out = prompt("  Custom output dir? (press Enter to use default): ").strip()
+
+        # ── Build command ──────────────────────────────────────────────────────
+        analytics_script = PROJECT_ROOT / "scripts" / "evaluation" / "best_model_analytics.py"
+        cmd = [sys.executable, str(analytics_script)]
+
+        if target_run_dir:
+            cmd += ["--run_dir", str(target_run_dir)]
+        else:
+            cmd.append("--auto")
+
+        if not skip_inference:
+            cmd += ["--test_images", test_images_path, "--conf", conf_val]
+        else:
+            cmd.append("--skip_inference")
+
+        if custom_out:
+            cmd += ["--out_dir", custom_out]
+
+        log_path = os.path.join(logs_dir, "12_best_model_analytics.log")
+        log_selection("Best Model Analytics",
+                      f"run={target_run_dir.name if target_run_dir else 'auto'}  "
+                      f"skip_inference={skip_inference}  conf={conf_val}")
+        ok = run_cmd_and_log(cmd, log_path, "best_model_analytics")
+
+        if ok:
+            if custom_out:
+                bundle_path = custom_out
+            elif target_run_dir:
+                bundle_path = str(target_run_dir / "analytics_export")
+            else:
+                bundle_path = str(runs_dir / "<best_run>" / "analytics_export")
+            print()
+            print("  ╔══════════════════════════════════════════════════════════╗")
+            print("  ║  EXPORT BUNDLE READY                                     ║")
+            print("  ╠══════════════════════════════════════════════════════════╣")
+            print(f"  ║  {bundle_path:<56}║")
+            print("  ╠══════════════════════════════════════════════════════════╣")
+            print("  ║  Contents:                                               ║")
+            print("  ║    • per_class_analytics/  (4 charts + CSV)              ║")
+            print("  ║    • test_results/          (annotated inference images)  ║")
+            print("  ║    • analytics_summary.xlsx (4-sheet workbook)            ║")
+            print("  ║    • model_comparison_report.xlsx                        ║")
+            print("  ║    • best_model/             (weights copy)               ║")
+            print("  ║    • comparison_plots/       (learning curves)            ║")
+            print("  ║    • README_export.txt       (bundle index)               ║")
+            print("  ╚══════════════════════════════════════════════════════════╝")
 
     else:
         print("[ERROR] Invalid choice.")

@@ -104,16 +104,22 @@ def migrate_raw():
 
 def migrate_external_carparts():
     src = DATASETS / "carparts-seg"
+    if not src.exists() and (PROJECT_ROOT / "carparts-seg").exists():
+        src = PROJECT_ROOT / "carparts-seg"
     dst = DATASETS / "external" / "carparts-seg"
 
     if not src.exists():
         print("[SKIP] datasets/carparts-seg not found.")
         return
-    if dst.exists() and any(dst.iterdir()):
+
+    has_imgs = (dst / "images").exists() and any((dst / "images").rglob("*.*"))
+    if dst.exists() and has_imgs:
         print(f"[SKIP] datasets/external/carparts-seg/ already populated.")
         return
 
     print("[*] Moving carparts-seg -> datasets/external/carparts-seg/ ...")
+    if dst.exists():
+        shutil.rmtree(dst)
     shutil.copytree(src, dst)
     print(f"[OK] external/carparts-seg/ ready.")
 

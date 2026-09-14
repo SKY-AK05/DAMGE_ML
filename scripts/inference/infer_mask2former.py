@@ -8,7 +8,7 @@ on a folder of new images and produces:
 
 This is different from auto_annotate_carparts.py (which uses zero-shot
 Grounding DINO + SAM2 with no training). This script uses YOUR trained model,
-so it only knows the 23 carparts-seg classes it was fine-tuned on -- but
+so it only knows the 32 carparts classes it was fine-tuned on -- but
 should be far more accurate for those classes, especially left/right telling
 apart, since that's exactly what Mask2Former proved better at in testing.
 
@@ -28,21 +28,51 @@ from datetime import datetime, timezone
 from pathlib import Path
 from PIL import Image
 
+# 32-class taxonomy — matches combined_data/unified_categories.yaml (COCO IDs 1-32 → list index 0-31)
 CARPARTS_SEG_CLASSES = [
-    "back_bumper", "back_door", "back_glass", "back_left_door", "back_left_light",
-    "back_light", "back_right_door", "back_right_light", "front_bumper", "front_door",
-    "front_glass", "front_left_door", "front_left_light", "front_light", "front_right_door",
-    "front_right_light", "hood", "left_mirror", "object", "right_mirror", "tailgate",
-    "trunk", "wheel",
+    "wheel",                   # 0  (COCO 1)
+    "wheel_cap",               # 1  (COCO 2)
+    "front_left_light",        # 2  (COCO 3)
+    "front_right_light",       # 3  (COCO 4)
+    "door_glass",              # 4  (COCO 5)
+    "left_mirror",             # 5  (COCO 6)
+    "right_mirror",            # 6  (COCO 7)
+    "front_bumper",            # 7  (COCO 8)
+    "grille",                  # 8  (COCO 9)
+    "front_left_door",         # 9  (COCO 10)
+    "front_right_door",        # 10 (COCO 11)
+    "hood",                    # 11 (COCO 12)
+    "pillar",                  # 12 (COCO 13)
+    "back_left_door",          # 13 (COCO 14)
+    "back_right_door",         # 14 (COCO 15)
+    "front_glass",             # 15 (COCO 16)
+    "front_left_fender",       # 16 (COCO 17)
+    "front_right_fender",      # 17 (COCO 18)
+    "back_left_light",         # 18 (COCO 19)
+    "back_right_light",        # 19 (COCO 20)
+    "rear_quarter_panel",      # 20 (COCO 21)
+    "roof",                    # 21 (COCO 22)
+    "side_skirt_rocker_panel", # 22 (COCO 23)
+    "fog_lamp",                # 23 (COCO 24)
+    "back_bumper",             # 24 (COCO 25)
+    "indicator",               # 25 (COCO 26)
+    "number_plate",            # 26 (COCO 27)
+    "back_glass",              # 27 (COCO 28)
+    "tailgate",                # 28 (COCO 29)
+    "fuel_lid",                # 29 (COCO 30)
+    "antenna",                 # 30 (COCO 31)
+    "trunk",                   # 31 (COCO 32)
 ]
 
-# Distinct colors per class for the overlay (cycles if more classes than colors)
+# Distinct colors per class for the overlay (one per class)
 COLORS = [
-    (255, 99, 71), (60, 179, 113), (65, 105, 225), (255, 215, 0), (218, 112, 214),
-    (0, 206, 209), (255, 140, 0), (154, 205, 50), (199, 21, 133), (30, 144, 255),
-    (255, 20, 147), (34, 139, 34), (255, 69, 0), (147, 112, 219), (0, 191, 255),
-    (220, 20, 60), (46, 139, 87), (255, 165, 0), (138, 43, 226), (0, 250, 154),
-    (255, 105, 180), (72, 61, 139), (240, 230, 140),
+    (255, 99, 71),   (60, 179, 113),  (65, 105, 225),  (255, 215, 0),   (218, 112, 214),
+    (0, 206, 209),   (255, 140, 0),   (154, 205, 50),  (199, 21, 133),  (30, 144, 255),
+    (255, 20, 147),  (34, 139, 34),   (255, 69, 0),    (147, 112, 219), (0, 191, 255),
+    (220, 20, 60),   (46, 139, 87),   (255, 165, 0),   (138, 43, 226),  (0, 250, 154),
+    (255, 105, 180), (72, 61, 139),   (240, 230, 140), (210, 105, 30),  (127, 255, 0),
+    (255, 0, 127),   (0, 128, 128),   (255, 215, 180), (100, 149, 237), (255, 99, 132),
+    (50, 205, 50),   (186, 85, 211),
 ]
 
 
