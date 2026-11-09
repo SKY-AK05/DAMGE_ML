@@ -286,6 +286,8 @@ def main():
     if _use_combined_data:
         cd_root      = Path(args.combined_data).resolve()
         cd_json_path = cd_root / "annotations" / "instances_unified.json"
+        if not cd_json_path.exists():
+            cd_json_path = cd_root / "annotations" / "instances.json"
         cd_images    = cd_root / "images"  # flat dir — same dir used for train + val
         print(f"[*] combined_data mode: {cd_root}")
         print(f"    Annotation file: {cd_json_path}")

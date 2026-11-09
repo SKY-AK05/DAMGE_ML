@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-10-20 00:06:35",
+  "source_directory": "C:\\Users\\Aakash\\Documents\\PROJECT WEB\\orchvate\\CAR_DAMAGE\\10k-cleaning\\CLEAN_DATASET",
+  "output_directory": "C:\\Users\\Aakash\\Documents\\PROJECT WEB\\orchvate\\CAR_DAMAGE\\10k-cleaning\\COMBINED_DATASET",
+  "processing_time_seconds": 26.8,
+  "note": "Only vehicle parts annotations (no damage labels)",
+  "statistics": {
+    "sources": {
+      "01_orchvate_custom": {
+        "images": 1741,
+        "annotations": 11192
+      },
+      "02_opensource_carparts_seg": {
+        "images": 3296,
+        "annotations": 11733
+      },
+      "03_opensource_dsmlr": {
+        "images": 500,
+        "annotations": 3326
+      },
+      "04_carDD": {
+        "images": 0,
+        "annotations": 0
+      },
+      "05_kaggle": {
+        "images": 979,
+        "annotations": 4549
+      }
+    },
+    "total_images": 6516,
+    "total_annotations": 30800,
+    "total_categories": 46
+  }
+}

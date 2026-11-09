@@ -268,16 +268,12 @@ class UnifiedEvaluator:
             rec_val = coco_eval_mask.eval['recall'][0, k_idx, 0, 2]
             recall = float(rec_val) if rec_val > -1 else 0.0
 
-            # Per-class precision: the precision value at the rightmost valid
-            # point on the IoU=0.50 P-R curve (i.e. at the highest recall
-            # threshold that has a valid entry).  This gives a true precision
-            # figure that is independent of mAP50.
-            valid_mask = prec > -1
-            if valid_mask.any():
-                # recThrs are uniformly spaced [0, 0.01, ..., 1.0]; the
-                # rightmost valid index corresponds to the highest achieved recall.
-                rightmost_valid_idx = int(np.where(valid_mask)[0][-1])
-                precision_at_op = float(prec[rightmost_valid_idx])
+            # Per-class precision: the precision value at the highest achieved recall
+            # on the IoU=0.50 P-R curve. In pycocotools, unreached recall thresholds
+            # remain 0.0, so the rightmost positive value corresponds to the achieved operating point.
+            pos_prec = np.where(prec > 0)[0]
+            if len(pos_prec) > 0:
+                precision_at_op = float(prec[pos_prec[-1]])
             else:
                 precision_at_op = 0.0
 
@@ -321,22 +317,21 @@ class UnifiedEvaluator:
         #  [1] AP @ IoU 0.50               → mAP50
         #  [2] AP @ IoU 0.75
         #  [8] AR @ maxDets=100            → mean recall
-        # Global precision: take the mean of the per-class precision values
-        # computed above from the P-R curves, which are already correct.
+        def _get_op_precision(coco_eval, k):
+            if not (hasattr(coco_eval, 'eval') and coco_eval.eval):
+                return 0.0
+            p = coco_eval.eval['precision'][0, :, k, 0, 2]
+            nz = np.where(p > 0)[0]
+            return float(p[nz[-1]]) if len(nz) > 0 else 0.0
+
         global_prec_box = float(np.mean([
-            float(coco_eval_box.eval['precision'][0, :, cat_id_to_k[cid], 0, 2][
-                coco_eval_box.eval['precision'][0, :, cat_id_to_k[cid], 0, 2] > -1
-            ][-1])
-            if (coco_eval_box.eval['precision'][0, :, cat_id_to_k[cid], 0, 2] > -1).any() else 0.0
+            _get_op_precision(coco_eval_box, cat_id_to_k[cid])
             for cid in sorted_cat_ids if cid in cat_id_to_k
         ])) if sorted_cat_ids and has_eval_dict else stats_box[0]
+
         global_prec_mask = float(np.mean([
-            float(coco_eval_mask.eval['precision'][0, :, cat_id_to_k[cid], 0, 2][
-                coco_eval_mask.eval['precision'][0, :, cat_id_to_k[cid], 0, 2] > -1
-            ][-1])
-            if (coco_eval_mask.eval['precision'][0, :, cat_id_to_k[cid], 0, 2] > -1).any() else 0.0
-            for cid in sorted_cat_ids if cid in cat_id_to_k
-        ])) if sorted_cat_ids and has_eval_dict else stats_mask[0]
+            m['precision'] for m in per_class_metrics.values()
+        ])) if per_class_metrics else stats_mask[0]
 
         metrics = {
             'precision_box': global_prec_box,

@@ -74,6 +74,8 @@ def display_main_menu():
     print("  10) Cleanup Pipeline       -- Wipe stale outputs interactively (safe, keeps raw/)")
     print("  11) Exit")
     print("  12) Best Model Analytics   -- Auto-find best run, deep per-class analysis & export bundle")
+    print("  13) All Runs Analytics     -- Generate deep per-class analysis & export bundles for ALL runs")
+    print("  14) Adaptive Distillation  -- Unified interactive multi-teacher KD training pipeline")
     print("======================================================================")
 
 
@@ -377,15 +379,16 @@ def prompt_dataset_sources():
     print("======================================================================")
     print("  1) RAW_DATASET only (your custom annotated data)")
     print("  2) External datasets only (carparts-seg + dsmlr from GitHub)")
-    print("  3) BOTH (RAW_DATASET + External datasets) [DEFAULT - RECOMMENDED]")
-    print("  4) combined_data  (pre-cleaned COCO, 32 classes — Mask2Former only)")
+    print("  3) BOTH (RAW_DATASET + External datasets) [RECOMMENDED]")
+    print("  4) RAW_DATASET2 (New Azure COMBINED_DATASET, 6,516 images) [DEFAULT - NEW]")
+    print("  5) combined_data (Legacy COCO dataset, 5,790 images)")
     print("======================================================================")
     print("  NOTE: Selecting BOTH gives ~5689 images vs ~1455 for RAW only")
     print("        External datasets are cached — no re-download if already present")
-    print("  NOTE: combined_data skips dataset prep entirely (already cleaned).")
-    print("        YOLO training is skipped for combined_data (COCO-only format).")
+    print("  NOTE: RAW_DATASET2 / combined_data skips dataset prep entirely (already cleaned).")
+    print("        YOLO training is skipped for COCO-only format.")
     print("======================================================================")
-    choice = prompt("Enter choice [1-4] (press Enter for 3 - BOTH): ") or "3"
+    choice = prompt("Enter choice [1-5] (press Enter for 4 - RAW_DATASET2): ") or "4"
 
     if choice == "1":
         print("  [Selected] RAW_DATASET only (1,455 images)")
@@ -394,12 +397,18 @@ def prompt_dataset_sources():
         print("  [Selected] External datasets only")
         return False, True, None
     elif choice == "4":
-        _combined_path = str(PROJECT_ROOT / "RAW_DATASET" / "combined_data")
-        print(f"  [Selected] combined_data (pre-cleaned COCO, 32 classes)")
+        _combined_path = str(PROJECT_ROOT / "RAW_DATASET2")
+        print(f"  [Selected] RAW_DATASET2 (New Azure COMBINED_DATASET, 6,516 images, 32 classes)")
         print(f"             Path: {_combined_path}")
         print("  [NOTE] YOLO training will be SKIPPED for this dataset source.")
         return False, False, _combined_path
-    else:  # choice == "3" or default
+    elif choice == "5":
+        _combined_path = str(PROJECT_ROOT / "RAW_DATASET" / "combined_data")
+        print(f"  [Selected] combined_data (legacy COCO, 32 classes)")
+        print(f"             Path: {_combined_path}")
+        print("  [NOTE] YOLO training will be SKIPPED for this dataset source.")
+        return False, False, _combined_path
+    else:  # choice == "3"
         print("  [Selected] BOTH datasets (~5,689 images)")
         return True, True, None
 
@@ -760,7 +769,7 @@ def main():
             f.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
 
     display_main_menu()
-    choice = prompt("Enter choice [1-12]: ")
+    choice = prompt("Enter choice [1-13]: ")
     log_selection("Main Menu", f"Option {choice}")
 
     if choice == "1":
@@ -1089,13 +1098,16 @@ def main():
         print("Exiting.")
         sys.exit(0)
 
-    elif choice == "12":
+    elif choice in ("12", "13"):
+        run_all = (choice == "13")
         print()
         print("======================================================================")
-        print(" Best Model Analytics -- Deep Per-Class Analysis & Export Bundle")
+        if run_all:
+            print(" All Runs Analytics -- Deep Per-Class Analysis for ALL Runs")
+        else:
+            print(" Best Model Analytics -- Deep Per-Class Analysis & Export Bundle")
         print("======================================================================")
-        print("  Scans all runs_comparison/ folders, finds the best trained model")
-        print("  by highest mask mAP50, then generates:")
+        print("  Generates deep per-class analytics:")
         print("    * Per-part mAP50 bar chart  (colour-coded green/amber/red tiers)")
         print("    * Radar chart               (precision vs recall per class)")
         print("    * Precision/Recall heatmap  (grid: class x metric)")
@@ -1107,53 +1119,54 @@ def main():
         print("======================================================================")
         print()
 
-        # ── Run selection ──────────────────────────────────────────────────────
         runs_dir = PROJECT_ROOT / "runs_comparison"
-        print("  [A] Run selection:")
-        print("    1) Auto-detect best run across ALL runs_comparison/ folders [Default]")
-        print("    2) Pick a specific run folder manually")
-        run_sel = prompt("  Enter choice [1-2] (default 1): ") or "1"
-
         target_run_dir  = None
         target_model_dir = None
 
-        if run_sel == "2":
-            # List available runs
-            avail_runs = sorted(
-                [d for d in runs_dir.iterdir() if d.is_dir() and d.name.startswith("run_")]
-            ) if runs_dir.exists() else []
-            if not avail_runs:
-                print("[ERROR] No run folders found in runs_comparison/")
-            else:
-                print()
-                print("  Available runs:")
-                for idx, rd in enumerate(avail_runs, 1):
-                    # Try to read best score for display
-                    score_str = ""
-                    for md in rd.iterdir():
-                        bm = md / "best_metrics.json" if md.is_dir() else None
-                        if bm and bm.exists():
-                            try:
-                                with open(bm, "r", encoding="utf-8") as _f:
-                                    _d = json.load(_f)
-                                vm = _d.get("val_metrics", {})
-                                s = vm.get("map50_mask", vm.get("map50_box",
-                                    _d.get("best_mask_map50", 0.0)))
-                                score_str = f"  [mAP50={s:.4f}  model={md.name}]"
-                            except Exception:
-                                pass
-                    print(f"    {idx:>2}) {rd.name}{score_str}")
-                print()
-                run_idx_str = prompt(f"  Enter run number [1-{len(avail_runs)}]: ")
-                try:
-                    run_idx = int(run_idx_str) - 1
-                    if 0 <= run_idx < len(avail_runs):
-                        target_run_dir = avail_runs[run_idx]
-                        print(f"  [Selected] {target_run_dir.name}")
-                    else:
-                        print("[WARN] Invalid selection — using auto-detect.")
-                except ValueError:
-                    print("[WARN] Invalid input — using auto-detect.")
+        if not run_all:
+            print("  [A] Run selection:")
+            print("    1) Auto-detect best run across ALL runs_comparison/ folders [Default]")
+            print("    2) Pick a specific run folder manually")
+            print("    3) Run analytics for ALL completed runs in runs_comparison/")
+            run_sel = prompt("  Enter choice [1-3] (default 1): ") or "1"
+
+            if run_sel == "3":
+                run_all = True
+            elif run_sel == "2":
+                avail_runs = sorted(
+                    [d for d in runs_dir.iterdir() if d.is_dir() and d.name.startswith("run_")]
+                ) if runs_dir.exists() else []
+                if not avail_runs:
+                    print("[ERROR] No run folders found in runs_comparison/")
+                else:
+                    print()
+                    print("  Available runs:")
+                    for idx, rd in enumerate(avail_runs, 1):
+                        score_str = ""
+                        for md in rd.iterdir():
+                            bm = md / "best_metrics.json" if md.is_dir() else None
+                            if bm and bm.exists():
+                                try:
+                                    with open(bm, "r", encoding="utf-8") as _f:
+                                        _d = json.load(_f)
+                                    vm = _d.get("val_metrics", {})
+                                    s = vm.get("map50_mask", vm.get("map50_box",
+                                        _d.get("best_mask_map50", 0.0)))
+                                    score_str = f"  [mAP50={s:.4f}  model={md.name}]"
+                                except Exception:
+                                    pass
+                        print(f"    {idx:>2}) {rd.name}{score_str}")
+                    print()
+                    run_idx_str = prompt(f"  Enter run number [1-{len(avail_runs)}]: ")
+                    try:
+                        run_idx = int(run_idx_str) - 1
+                        if 0 <= run_idx < len(avail_runs):
+                            target_run_dir = avail_runs[run_idx]
+                            print(f"  [Selected] {target_run_dir.name}")
+                        else:
+                            print("[WARN] Invalid selection — using auto-detect.")
+                    except ValueError:
+                        print("[WARN] Invalid input — using auto-detect.")
 
         # ── Inference options ──────────────────────────────────────────────────
         default_test = str(PROJECT_ROOT / "test_data")
@@ -1168,19 +1181,26 @@ def main():
             conf_val = prompt_default("  Inference confidence threshold", "0.35")
 
         # ── Output directory ───────────────────────────────────────────────────
-        if target_run_dir:
-            default_out = str(target_run_dir / "analytics_export")
+        custom_out = ""
+        if not run_all:
+            if target_run_dir:
+                default_out = str(target_run_dir / "analytics_export")
+            else:
+                default_out = "<auto — inside best run folder>/analytics_export"
+            print()
+            print(f"  Output will be saved to: {default_out}")
+            custom_out = prompt("  Custom output dir? (press Enter to use default): ").strip()
         else:
-            default_out = "<auto — inside best run folder>/analytics_export"
-        print()
-        print(f"  Output will be saved to: {default_out}")
-        custom_out = prompt("  Custom output dir? (press Enter to use default): ").strip()
+            print()
+            print("  Outputs will be saved inside each run folder: <run_dir>/analytics_export")
 
         # ── Build command ──────────────────────────────────────────────────────
         analytics_script = PROJECT_ROOT / "scripts" / "evaluation" / "best_model_analytics.py"
         cmd = [sys.executable, str(analytics_script)]
 
-        if target_run_dir:
+        if run_all:
+            cmd.append("--all")
+        elif target_run_dir:
             cmd += ["--run_dir", str(target_run_dir)]
         else:
             cmd.append("--auto")
@@ -1190,17 +1210,20 @@ def main():
         else:
             cmd.append("--skip_inference")
 
-        if custom_out:
+        if custom_out and not run_all:
             cmd += ["--out_dir", custom_out]
 
-        log_path = os.path.join(logs_dir, "12_best_model_analytics.log")
-        log_selection("Best Model Analytics",
-                      f"run={target_run_dir.name if target_run_dir else 'auto'}  "
+        task_title = "All Runs Analytics" if run_all else "Best Model Analytics"
+        log_path = os.path.join(logs_dir, "12_analytics.log")
+        log_selection(task_title,
+                      f"mode={'all' if run_all else (target_run_dir.name if target_run_dir else 'auto')}  "
                       f"skip_inference={skip_inference}  conf={conf_val}")
-        ok = run_cmd_and_log(cmd, log_path, "best_model_analytics")
+        ok = run_cmd_and_log(cmd, log_path, "analytics")
 
         if ok:
-            if custom_out:
+            if run_all:
+                bundle_path = str(runs_dir / "<each_run>" / "analytics_export")
+            elif custom_out:
                 bundle_path = custom_out
             elif target_run_dir:
                 bundle_path = str(target_run_dir / "analytics_export")
@@ -1221,6 +1244,11 @@ def main():
             print("  ║    • comparison_plots/       (learning curves)            ║")
             print("  ║    • README_export.txt       (bundle index)               ║")
             print("  ╚══════════════════════════════════════════════════════════╝")
+
+    elif choice == "14":
+        print("\n[TASK] Ground-Truth-Guided Adaptive Multi-Teacher Distillation Pipeline")
+        distill_script = PROJECT_ROOT / "pipelines" / "adaptive_distillation" / "run_training.py"
+        subprocess.run([sys.executable, str(distill_script)])
 
     else:
         print("[ERROR] Invalid choice.")

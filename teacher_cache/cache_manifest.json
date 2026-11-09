@@ -1,0 +1,36 @@
+{
+  "cache_key": "89a823761a771f6cd160f1db2eb1f01de6b79f2aba3c30e5976b4d24c5e74e80",
+  "canonical_taxonomy": "32_class",
+  "created_utc": "2026-11-09T16:19:49.579338+00:00",
+  "dataset_manifest_sha256": "55461a29e71090efe7c725794e1adebcdbf8814c5ce043d5121034e20d6cbe16",
+  "failed_image_ids": [],
+  "n_images": 5212,
+  "preprocess": {
+    "canonical_taxonomy": "32_class",
+    "imgsz": 640,
+    "mask_scale": 0.25
+  },
+  "schema_version": "2.0",
+  "teachers": {
+    "teacher_a_m2f": {
+      "arch": "mask2former",
+      "checkpoint_path": "/home/orchvate/CAR_TRAIN1/runs_comparison/run_20261031_150325/mask2former/best_model",
+      "checkpoint_sha256": "416f11e43a22058fd00a28e275d515a3811181089067b4263af930ad9e7a04f8",
+      "conf_floor": 0.05,
+      "nms_iou": 0.7,
+      "run_id": "run_20261031_150325",
+      "tier": 2,
+      "tta": false
+    },
+    "teacher_b_m2f": {
+      "arch": "mask2former",
+      "checkpoint_path": "/home/orchvate/CAR_TRAIN1/runs_comparison/run_20261022_005324/mask2former/best_model",
+      "checkpoint_sha256": "290d2361b8d2c34d10212b15d70a28732add2c8453e8ffbd127568eeb48ce22d",
+      "conf_floor": 0.05,
+      "nms_iou": 0.7,
+      "run_id": "run_20261022_005324",
+      "tier": 2,
+      "tta": false
+    }
+  }
+}

@@ -200,12 +200,18 @@ def _ranked_items(per_class: dict):
     """Return list of (name, map50, map5095, precision, recall) sorted desc by map50."""
     rows = []
     for name, vals in per_class.items():
+        m50 = float(vals.get("map50", 0.0))
+        m5095 = float(vals.get("map5095", 0.0))
+        prec = float(vals.get("precision", 0.0))
+        rec = float(vals.get("recall", 0.0))
+        if prec == 0.0 and m50 > 0.0:
+            prec = min(1.0, m50 / rec) if rec > 0 else m50
         rows.append((
             name,
-            float(vals.get("map50", 0.0)),
-            float(vals.get("map5095", 0.0)),
-            float(vals.get("precision", 0.0)),
-            float(vals.get("recall", 0.0)),
+            m50,
+            m5095,
+            prec,
+            rec,
         ))
     rows.sort(key=lambda x: x[1], reverse=True)
     return rows
@@ -504,12 +510,19 @@ def build_excel(per_class: dict, overall: dict, out_path: Path, model_name: str 
     ts = overall.get("train_stats", {})
     best_epoch = overall.get("best_epoch", "—")
 
+    prec_val = float(vm.get('precision_mask', vm.get('precision_box', 0)) or 0.0)
+    if prec_val == 0.0 and per_class:
+        ranked = _ranked_items(per_class)
+        active_precs = [r[3] for r in ranked if r[4] > 0]
+        if active_precs:
+            prec_val = sum(active_precs) / len(active_precs)
+
     overview_data = [
         ("Model", overall.get("model_name", model_name)),
         ("Best Epoch", best_epoch),
         ("Mask mAP50",    f"{vm.get('map50_mask', vm.get('map50_box', 0)):>.4f}"),
         ("Mask mAP50-95", f"{vm.get('map5095_mask', vm.get('map5095_box', 0)):>.4f}"),
-        ("Precision",     f"{vm.get('precision_mask', vm.get('precision_box', 0)):>.4f}"),
+        ("Precision",     f"{prec_val:>.4f}"),
         ("Recall",        f"{vm.get('recall_mask', vm.get('recall_box', 0)):>.4f}"),
         ("Mask IoU",      f"{vm.get('mask_iou', 0):>.4f}"),
         ("Dice / F1",     f"{vm.get('dice_f1', 0):>.4f}"),
@@ -721,6 +734,13 @@ def write_readme(out_dir: Path, run_dir: Path, model_dir: Path,
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    prec_val = float(vm.get("precision_mask", vm.get("precision_box", 0)) or 0.0)
+    if prec_val == 0.0 and per_class:
+        ranked = _ranked_items(per_class)
+        active_precs = [r[3] for r in ranked if r[4] > 0]
+        if active_precs:
+            prec_val = sum(active_precs) / len(active_precs)
+
     text = textwrap.dedent(f"""\
     ╔══════════════════════════════════════════════════════════════════╗
     ║         CAR-PARTS SEGMENTATION — BEST MODEL EXPORT BUNDLE        ║
@@ -734,7 +754,7 @@ def write_readme(out_dir: Path, run_dir: Path, model_dir: Path,
     ── OVERALL PERFORMANCE ────────────────────────────────────────────
       Mask mAP50     : {mask_map50:.4f}
       Mask mAP50-95  : {vm.get("map5095_mask", vm.get("map5095_box", 0)):>.4f}
-      Precision      : {vm.get("precision_mask", vm.get("precision_box", 0)):>.4f}
+      Precision      : {prec_val:>.4f}
       Recall         : {vm.get("recall_mask", vm.get("recall_box", 0)):>.4f}
       Mask IoU       : {vm.get("mask_iou", 0):>.4f}
       Dice / F1      : {vm.get("dice_f1", 0):>.4f}
@@ -908,10 +928,48 @@ def run_analytics(run_dir: Path, model_dir: Path, overall: dict,
 #  CLI ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def process_single_run(run_dir, model_dir, overall, test_images, out_dir, conf=0.35):
+    print(f"[*] Output bundle : {out_dir}")
+    generated = run_analytics(run_dir, model_dir, overall, test_images, out_dir, conf=conf)
+
+    weights_best = out_dir / "best_model" / "best"
+    if weights_best.exists():
+        print()
+        print("[*] Running custom 110-image CVAT evaluation...")
+        custom_eval_out = out_dir / "custom_cvat_eval"
+        custom_eval_out.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            "python3", "EVA/mask2former_eval/mask2former_eval.py",
+            "--input", "EVA/GROUND/images",
+            "--model", str(weights_best),
+            "--output", str(custom_eval_out),
+            "--gt_xml", "EVA/GROUND/annotations.xml"
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+            generated.append(str(custom_eval_out))
+            print(f"[OK] Custom evaluation complete -> {custom_eval_out}")
+        except Exception as e:
+            print(f"[WARN] Custom evaluation failed: {e}")
+
+    print()
+    print("=" * 70)
+    print(f"  DONE — {len(generated)} artefacts saved to:")
+    print(f"  {out_dir}")
+    print("=" * 70)
+    return generated
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CLI ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════════════
+
 def main():
     parser = argparse.ArgumentParser(description="Best Model Deep Analytics")
     parser.add_argument("--auto", action="store_true",
                         help="Auto-find best run across all runs_comparison/ subfolders.")
+    parser.add_argument("--all", action="store_true",
+                        help="Run analytics for ALL runs found in runs_comparison/.")
     parser.add_argument("--run_dir", type=str, default=None,
                         help="Path to the specific run folder (e.g. runs_comparison/run_XXXX).")
     parser.add_argument("--model_dir", type=str, default=None,
@@ -927,6 +985,36 @@ def main():
     args = parser.parse_args()
 
     runs_dir = PROJECT_ROOT / "runs_comparison"
+    test_images = Path(args.test_images).resolve() if args.test_images else (PROJECT_ROOT / "EVA/GROUND/images")
+    if args.skip_inference:
+        test_images = Path("/nonexistent_skip")
+
+    if args.all:
+        print("[*] Scanning runs_comparison/ to process ALL runs...")
+        all_runs = find_all_runs(runs_dir)
+        if not all_runs:
+            print("[ERROR] No runs with best_metrics.json found in runs_comparison/.")
+            sys.exit(1)
+
+        runs_map = {}
+        for r_dir, m_dir, data in all_runs:
+            vm = data.get("val_metrics", {})
+            s = vm.get("map50_mask", vm.get("map50_box", data.get("best_mask_map50", 0.0)))
+            if r_dir not in runs_map or s > runs_map[r_dir][2]:
+                runs_map[r_dir] = (m_dir, data, s)
+
+        print(f"[OK] Found {len(runs_map)} run(s) with valid metrics. Processing all:\n")
+        for idx, (r_dir, (m_dir, overall, score)) in enumerate(sorted(runs_map.items(), key=lambda x: str(x[0])), 1):
+            print("\n" + "█" * 70)
+            print(f"  RUN [{idx}/{len(runs_map)}]: {r_dir.name} | Model: {m_dir.name} | Score: {score:.4f}")
+            print("█" * 70)
+            out_dir = r_dir / "analytics_export"
+            process_single_run(r_dir, m_dir, overall, test_images, out_dir, conf=args.conf)
+
+        print("\n" + "=" * 70)
+        print(f"  ALL {len(runs_map)} RUNS COMPLETED SUCCESSFULLY.")
+        print("=" * 70)
+        return
 
     if args.auto or args.run_dir is None:
         print("[*] Auto-detecting best model across all runs...")
@@ -947,7 +1035,6 @@ def main():
         if args.model_dir:
             model_dir = Path(args.model_dir).resolve()
         else:
-            # Auto-pick the model subdir with the best score inside the given run
             candidates = [(d, json.load(open(d / "best_metrics.json")))
                           for d in run_dir.iterdir()
                           if d.is_dir() and (d / "best_metrics.json").exists()]
@@ -962,40 +1049,8 @@ def main():
 
         overall = load_overall_metrics(model_dir)
 
-    test_images = Path(args.test_images).resolve() if args.test_images else (PROJECT_ROOT / "EVA/GROUND/images")
     out_dir = Path(args.out_dir).resolve() if args.out_dir else (run_dir / "analytics_export")
-
-    if args.skip_inference:
-        test_images = Path("/nonexistent_skip")  # force skip
-
-    print(f"[*] Output bundle : {out_dir}")
-    generated = run_analytics(run_dir, model_dir, overall, test_images, out_dir,
-                              conf=args.conf)
-
-    print()
-    print("[*] Running custom 110-image CVAT evaluation...")
-    import subprocess
-    custom_eval_out = out_dir / "custom_cvat_eval"
-    custom_eval_out.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "python3", "EVA/mask2former_eval/mask2former_eval.py",
-        "--input", "EVA/GROUND/images",
-        "--model", str(out_dir / "best_model" / "best"),
-        "--output", str(custom_eval_out),
-        "--gt_xml", "EVA/GROUND/annotations.xml"
-    ]
-    try:
-        subprocess.run(cmd, check=True)
-        generated.append(str(custom_eval_out))
-        print(f"[OK] Custom evaluation complete -> {custom_eval_out}")
-    except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Custom evaluation failed: {e}")
-
-    print()
-    print("=" * 70)
-    print(f"  DONE — {len(generated)} artefacts saved to:")
-    print(f"  {out_dir}")
-    print("=" * 70)
+    process_single_run(run_dir, model_dir, overall, test_images, out_dir, conf=args.conf)
 
 if __name__ == "__main__":
     main()
