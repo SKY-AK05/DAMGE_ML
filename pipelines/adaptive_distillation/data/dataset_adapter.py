@@ -24,8 +24,9 @@ from PIL import Image as PILImage
 from torch.utils.data import Dataset
 from pycocotools import mask as mask_utils
 
-from pipelines.adaptive_distillation.cache.cache_reader import CacheReader, CachedImageRecord
+from pipelines.adaptive_distillation.cache.cache_reader import CacheReader, CachedImageRecord, CachedInstanceRecord
 from pipelines.adaptive_distillation.data.transforms import AlignedTransforms
+from pipelines.adaptive_distillation.matching.teacher_fusion import TeacherFusion
 
 
 class DistillationDataset(Dataset):
@@ -36,7 +37,7 @@ class DistillationDataset(Dataset):
       - 'pixel_values':  Tensor(3, H_proc, W_proc) — M2F preprocessed
       - 'gt':            Dict with 'boxes', 'labels', 'masks', 'image_id' — raw COCO format
       - 'teachers':      Dict[teacher_name -> CachedImageRecord]
-      - 'transformed_teacher_instances': List[CachedInstanceRecord] — all teachers merged
+      - 'transformed_teacher_instances': List[CachedInstanceRecord] — fused/filtered teacher instances
       - 'image_id':      str
     """
 
@@ -48,6 +49,7 @@ class DistillationDataset(Dataset):
         transforms: Optional[AlignedTransforms] = None,
         num_classes: int = 32,
         processor=None,     # Mask2FormerImageProcessor; if None, raw normalized tensor returned
+        fusion_engine: Optional[TeacherFusion] = None,
     ):
         self.images_dir = Path(images_dir)
         self.coco_json_path = Path(coco_json_path)
@@ -55,6 +57,7 @@ class DistillationDataset(Dataset):
         self.transforms = transforms or AlignedTransforms(level="L0")
         self.num_classes = num_classes
         self.processor = processor
+        self.fusion_engine = fusion_engine
 
         with open(self.coco_json_path, "r", encoding="utf-8") as f:
             self.coco_data = json.load(f)
@@ -109,16 +112,36 @@ class DistillationDataset(Dataset):
 
         # Load cached teacher predictions
         teacher_records: Dict[str, CachedImageRecord] = {}
-        all_teacher_instances = []
         for t_name, reader in self.cache_readers.items():
             try:
                 rec = reader.read_image(image_id)
                 teacher_records[t_name] = rec
-                all_teacher_instances.extend(rec.instances)
             except Exception:
                 teacher_records[t_name] = CachedImageRecord(
                     image_id=image_id, width=w, height=h, is_empty=True, instances=[]
                 )
+
+        # Multi-teacher fusion vs single-teacher streaming
+        all_teacher_instances = []
+        if len(self.cache_readers) > 1 and self.fusion_engine is not None:
+            by_teacher = {}
+            for t_name, rec in teacher_records.items():
+                by_teacher[t_name] = [(inst, inst.omega) for inst in rec.instances]
+            fused_list = self.fusion_engine.fuse_image_instances(by_teacher, gt_canonical_classes=list(gt_classes_np))
+            for fi in fused_list:
+                if fi.effective_weight > 0.0 and fi.canonical_class_id is not None:
+                    all_teacher_instances.append(CachedInstanceRecord(
+                        canonical_class_id=fi.canonical_class_id,
+                        confidence=fi.effective_weight,
+                        box=fi.box,
+                        mask_rle=fi.mask_rle,
+                        mask_prob_downscaled=fi.mask_prob_downscaled,
+                        omega=fi.effective_weight,
+                        status="FUSED" if fi.is_fused else "SOLO",
+                    ))
+        else:
+            for t_name, rec in teacher_records.items():
+                all_teacher_instances.extend(rec.instances)
 
         # Apply spatial/photometric transforms (L0 = none, L1+ = augmentation)
         trans_img, trans_boxes, trans_masks, trans_teachers = self.transforms(

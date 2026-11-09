@@ -1,0 +1,92 @@
+experiment_name: e4_single_teacher_b
+output_dir: /home/orchvate/CAR_TRAIN1/runs/distillation
+teachers:
+- name: teacher_b_m2f
+  arch: mask2former
+  checkpoint_path: /home/orchvate/CAR_TRAIN1/runs_comparison/run_20261022_005324/mask2former/best_model
+  conf_floor: 0.05
+  nms_iou: 0.7
+  tta: false
+  class_map: 32_class
+  run_id: run_20261022_005324
+dataset:
+  name: RAW_DATASET2
+  root: /home/orchvate/CAR_TRAIN1/RAW_DATASET2
+  train_images: /home/orchvate/CAR_TRAIN1/RAW_DATASET2/images
+  val_images: /home/orchvate/CAR_TRAIN1/RAW_DATASET2/images
+  test_images: /home/orchvate/CAR_TRAIN1/EVA/GROUND/images
+  train_json: /home/orchvate/CAR_TRAIN1/RAW_DATASET2/annotations/train_5212.json
+  calib_json: /home/orchvate/CAR_TRAIN1/RAW_DATASET2/annotations/calib_652.json
+  val_json: /home/orchvate/CAR_TRAIN1/RAW_DATASET2/annotations/val_652.json
+  test_json: /home/orchvate/CAR_TRAIN1/EVA/GROUND/coco_annotations.json
+  canonical_taxonomy: 32_class
+  imgsz: 640
+matching:
+  tau_match: 0.5
+  tau_low: 0.1
+  metric: mask_iou
+  class_agnostic: true
+reliability:
+  shrinkage_m: 20.0
+  n_min: 10
+  metric_type: recall_aware_iou
+  bootstrap_iterations: 500
+  conf_calibration: isotonic
+weights:
+  mode: fixed
+  gate_type: smooth
+  gate_margin: 0.02
+  g_min: 0.0
+  share_type: softmax
+  temperature: 0.5
+  s_min: 0.1
+  instance_enabled: true
+  omega_min: 0.1
+  output_type_split: false
+fusion:
+  tau_cluster: 0.6
+  solo_penalty: 0.8
+  disagreement_ratio: 2.0
+  box_fusion_mode: wbf
+cache:
+  dir: /home/orchvate/CAR_TRAIN1/teacher_cache
+  tier: 2
+  shard_size: 500
+  storage_format: npz
+  require_key: null
+  mask_scale: 0.25
+student:
+  arch: mask2former
+  init: scratch
+  imgsz: 640
+  epochs: 50
+  batch_size: 4
+  workers: 4
+  lr0: 0.0001
+  weight_decay: 0.0001
+  momentum: 0.9
+  optimizer: adamw
+  amp: true
+distill:
+  enabled: true
+  lambda_schedule: warmup
+  lambda_max: 1.0
+  warmup_epochs: 10
+  temperature: 2.0
+  loss_reduction: weighted_mean
+  ignore_vetoed: true
+  ignore_absence: true
+  quarantine_unmatched: true
+augmentation:
+  level: L0
+  hflip_prob: 0.5
+  scale_range:
+  - 0.8
+  - 1.2
+evaluation:
+  conf: 0.001
+  nms_iou: 0.7
+  primary_metric: mask_mAP50-95
+  seed: 42
+  num_seeds: 3
+

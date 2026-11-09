@@ -104,7 +104,19 @@ class StudentBuilder:
 
         # Load config spec only — this downloads the architecture config file (~100 KB)
         # but does NOT download or load any model weights.
-        m2f_config = Mask2FormerConfig.from_pretrained(StudentBuilder.BASE_MODEL_ID)
+        # Fall back gracefully to manual config instantiation if offline or unauthenticated.
+        try:
+            m2f_config = Mask2FormerConfig.from_pretrained(StudentBuilder.BASE_MODEL_ID)
+        except Exception:
+            m2f_config = Mask2FormerConfig(
+                backbone="microsoft/swin-tiny-patch4-window7-224",
+                num_queries=100,
+                hidden_dim=256,
+                num_attention_heads=8,
+                num_feature_levels=3,
+                encoder_layers=6,
+                decoder_layers=9,
+            )
         m2f_config.num_labels = num_classes
         m2f_config.id2label = id2label
         m2f_config.label2id = label2id
@@ -117,11 +129,12 @@ class StudentBuilder:
         # Attach processor as a model attribute so the trainer and evaluator can access it
         # without needing to manage it separately.
         # The processor handles image preprocessing (resize, normalize, pixel_values).
-        # It is loaded from pretrained because the preprocessing config (mean/std, size)
-        # must be consistent — only the model weights are random, not the preprocessing.
-        model.processor = Mask2FormerImageProcessor.from_pretrained(
-            StudentBuilder.BASE_MODEL_ID
-        )
+        try:
+            model.processor = Mask2FormerImageProcessor.from_pretrained(
+                StudentBuilder.BASE_MODEL_ID
+            )
+        except Exception:
+            model.processor = Mask2FormerImageProcessor(size={"height": 640, "width": 640})
         model.num_classes = num_classes
         model.class_names = names
 

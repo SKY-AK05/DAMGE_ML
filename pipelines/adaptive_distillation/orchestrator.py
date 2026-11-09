@@ -61,7 +61,7 @@ def display_menu():
 def main():
     parser = argparse.ArgumentParser(description="Adaptive Multi-Teacher Distillation Orchestrator")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to pipeline configuration YAML")
-    parser.add_argument("--auto_run", choices=["cache", "e2", "e5", "e6", "eval"], default=None, help="Direct non-interactive run mode")
+    parser.add_argument("--auto_run", choices=["cache", "e2", "e3", "e4", "e5", "e6", "eval"], default=None, help="Direct non-interactive run mode")
     args = parser.parse_args()
 
     cfg_path = Path(args.config)
@@ -70,16 +70,21 @@ def main():
         DistillationPipelineConfig().save_yaml(cfg_path)
 
     if args.auto_run:
+        python_exe = sys.executable or "python3"
         if args.auto_run == "cache":
-            run_command(["python3", "pipelines/adaptive_distillation/scripts/prepare_teacher_cache.py", "--config", str(cfg_path)])
+            run_command([python_exe, "pipelines/adaptive_distillation/scripts/prepare_teacher_cache.py", "--config", str(cfg_path)])
         elif args.auto_run == "e2":
-            run_command(["python3", "pipelines/adaptive_distillation/scripts/train_student.py", "--config", str(cfg_path), "--no_distill"])
+            run_command([python_exe, "pipelines/adaptive_distillation/scripts/train_student.py", "--config", str(cfg_path), "--no_distill"])
+        elif args.auto_run == "e3":
+            run_command([python_exe, "pipelines/adaptive_distillation/scripts/train_student.py", "--config", str(cfg_path), "--teachers", "teacher_a_m2f", "--exp_name", "e3_single_teacher_a"])
+        elif args.auto_run == "e4":
+            run_command([python_exe, "pipelines/adaptive_distillation/scripts/train_student.py", "--config", str(cfg_path), "--teachers", "teacher_b_m2f", "--exp_name", "e4_single_teacher_b"])
         elif args.auto_run == "e5":
-            run_command(["python3", "pipelines/adaptive_distillation/scripts/train_student.py", "--config", str(cfg_path), "--mode", "fixed", "--exp_name", "e5_fixed_multiteacher"])
+            run_command([python_exe, "pipelines/adaptive_distillation/scripts/train_student.py", "--config", str(cfg_path), "--mode", "fixed", "--exp_name", "e5_fixed_multiteacher"])
         elif args.auto_run == "e6":
-            run_command(["python3", "pipelines/adaptive_distillation/scripts/train_student.py", "--config", str(cfg_path), "--mode", "adaptive", "--exp_name", "e6_adaptive_multiteacher"])
+            run_command([python_exe, "pipelines/adaptive_distillation/scripts/train_student.py", "--config", str(cfg_path), "--mode", "adaptive", "--exp_name", "e6_adaptive_multiteacher"])
         elif args.auto_run == "eval":
-            run_command(["python3", "pipelines/adaptive_distillation/scripts/evaluate_experiments.py", "--config", str(cfg_path)])
+            run_command([python_exe, "pipelines/adaptive_distillation/scripts/evaluate_experiments.py", "--config", str(cfg_path)])
         return
 
     scanner = TeacherScanner()

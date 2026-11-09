@@ -6,16 +6,54 @@ Provides structured dataclasses and YAML serialization with schema validation.
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Dict, Optional, Any
+import os
 import yaml
 import hashlib
 import json
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def resolve_portable_path(path_str: str | Path | None) -> str:
+    """
+    Resolves paths portably between Azure VM (/home/orchvate/CAR_TRAIN1) and local dev environments.
+    """
+    if path_str is None:
+        return ""
+    p = Path(path_str)
+    if p.exists():
+        return str(p)
+
+    # Check CAR_PROJECT_ROOT env var
+    env_root = os.environ.get("CAR_PROJECT_ROOT")
+    p_str = str(path_str).replace("\\", "/")
+    if env_root and Path(env_root).exists():
+        if "CAR_TRAIN1/" in p_str:
+            rel = p_str.split("CAR_TRAIN1/")[-1]
+            cand = Path(env_root) / rel
+            if cand.exists():
+                return str(cand)
+
+    # Fallback: resolve relative to PROJECT_ROOT
+    if "CAR_TRAIN1/" in p_str:
+        rel = p_str.split("CAR_TRAIN1/")[-1]
+        cand = PROJECT_ROOT / rel
+        if cand.exists():
+            return str(cand)
+        return str(PROJECT_ROOT / rel)
+
+    cand = PROJECT_ROOT / path_str
+    if cand.exists():
+        return str(cand)
+
+    return str(path_str)
+
 
 @dataclass
 class TeacherConfig:
-    name: str                                # e.g. "Teacher_A"
-    arch: str                                # "yolo", "mask2former", "maskrcnn"
-    checkpoint_path: str                     # Path to .pt or safetensors directory
+    name: str                                # e.g. "teacher_a_m2f"
+    arch: str = "mask2former"                # "mask2former" (Swin-Tiny)
+    checkpoint_path: str = ""                # Path to checkpoint or safetensors directory
     conf_floor: float = 0.05                 # Low conf floor for full calibration curve
     nms_iou: float = 0.70                    # Permissive NMS at cache generation time
     tta: bool = False                        # Test-Time Augmentation
@@ -156,8 +194,24 @@ class DistillationPipelineConfig:
         with open(p, "w", encoding="utf-8") as f:
             yaml.dump(self.to_dict(), f, sort_keys=False, default_flow_style=False)
 
+    def resolve_paths(self) -> "DistillationPipelineConfig":
+        """Resolves all path fields to existing local/VM paths portably."""
+        self.output_dir = resolve_portable_path(self.output_dir)
+        self.dataset.root = resolve_portable_path(self.dataset.root)
+        self.dataset.train_images = resolve_portable_path(self.dataset.train_images)
+        self.dataset.val_images = resolve_portable_path(self.dataset.val_images)
+        self.dataset.test_images = resolve_portable_path(self.dataset.test_images)
+        self.dataset.train_json = resolve_portable_path(self.dataset.train_json)
+        self.dataset.calib_json = resolve_portable_path(self.dataset.calib_json)
+        self.dataset.val_json = resolve_portable_path(self.dataset.val_json)
+        self.dataset.test_json = resolve_portable_path(self.dataset.test_json)
+        self.cache.dir = resolve_portable_path(self.cache.dir)
+        for t in self.teachers:
+            t.checkpoint_path = resolve_portable_path(t.checkpoint_path)
+        return self
+
     @classmethod
-    def from_yaml(cls, path: Path | str) -> "DistillationPipelineConfig":
+    def from_yaml(cls, path: Path | str, auto_resolve: bool = True) -> "DistillationPipelineConfig":
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         
@@ -174,7 +228,7 @@ class DistillationPipelineConfig:
         augmentation = AugmentationConfig(**data.get("augmentation", {}))
         evaluation = EvaluationConfig(**data.get("evaluation", {}))
 
-        return cls(
+        cfg = cls(
             experiment_name=data.get("experiment_name", "distillation_exp"),
             output_dir=data.get("output_dir", "/home/orchvate/CAR_TRAIN1/runs/distillation"),
             teachers=teachers,
@@ -189,6 +243,9 @@ class DistillationPipelineConfig:
             augmentation=augmentation,
             evaluation=evaluation
         )
+        if auto_resolve:
+            cfg.resolve_paths()
+        return cfg
 
     def compute_config_hash(self) -> str:
         """Computes deterministic SHA-256 hash of entire configuration state."""

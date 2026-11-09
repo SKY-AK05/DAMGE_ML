@@ -31,6 +31,7 @@ from pipelines.adaptive_distillation.cache.cache_compatibility_manager import (
 from pipelines.adaptive_distillation.cache.cache_reader import CacheReader
 from pipelines.adaptive_distillation.data.dataset_adapter import DistillationDataset, distillation_collate_fn
 from pipelines.adaptive_distillation.data.transforms import AlignedTransforms
+from pipelines.adaptive_distillation.matching.teacher_fusion import TeacherFusion
 from pipelines.adaptive_distillation.student.student_builder import StudentBuilder
 from pipelines.adaptive_distillation.student.distillation_trainer import DistillationTrainer
 from pipelines.adaptive_distillation.evaluation.evaluator import PipelineEvaluator
@@ -463,11 +464,16 @@ class DistillationWorkflow:
             hflip_prob=self.cfg.augmentation.hflip_prob,
             target_size=self.cfg.dataset.imgsz
         )
+        fusion_engine = TeacherFusion(self.cfg.fusion) if self.cfg.distill.enabled else None
+        processor = getattr(student_model, "processor", None)
+
         train_dataset = DistillationDataset(
             images_dir=self.cfg.dataset.train_images,
             coco_json_path=self.cfg.dataset.train_json,
             cache_readers=cache_readers,
-            transforms=train_transforms
+            transforms=train_transforms,
+            processor=processor,
+            fusion_engine=fusion_engine,
         )
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
@@ -481,7 +487,8 @@ class DistillationWorkflow:
         val_dataset = DistillationDataset(
             images_dir=self.cfg.dataset.val_images,
             coco_json_path=self.cfg.dataset.val_json,
-            transforms=AlignedTransforms(level="L0", target_size=self.cfg.dataset.imgsz)
+            transforms=AlignedTransforms(level="L0", target_size=self.cfg.dataset.imgsz),
+            processor=processor,
         )
         val_loader = torch.utils.data.DataLoader(
             val_dataset,

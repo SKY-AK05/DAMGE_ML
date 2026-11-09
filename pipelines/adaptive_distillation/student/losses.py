@@ -23,6 +23,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from scipy.optimize import linear_sum_assignment
 
 from pipelines.adaptive_distillation.config import DistillationConfig
 from pipelines.adaptive_distillation.cache.cache_reader import CachedInstanceRecord
@@ -269,22 +270,93 @@ class DistillationLoss(nn.Module):
                 sub_mask_labels.append(ml)
                 sub_class_labels.append(t["labels"])
 
-        # Student forward on pseudo-targets
+        # Forward pass on active sub-batch to retrieve student predictions
         kd_outputs = student_model(
             pixel_values=sub_pv,
             mask_labels=sub_mask_labels,
             class_labels=sub_class_labels,
         )
 
+        # Check if student model provides query-level outputs for absence-safe distillation
+        has_query_logits = (
+            hasattr(kd_outputs, "class_queries_logits") and 
+            hasattr(kd_outputs, "masks_queries_logits") and
+            kd_outputs.class_queries_logits is not None and
+            kd_outputs.masks_queries_logits is not None
+        )
+
+        if has_query_logits:
+            # Query-level Hungarian assignment: zero loss on unassigned student queries
+            # (Strictly ensures teacher absence is NEVER penalized as background)
+            class_logits = kd_outputs.class_queries_logits   # (B_sub, Q, C+1)
+            mask_logits = kd_outputs.masks_queries_logits    # (B_sub, Q, H_m, W_m)
+            total_kd_loss = torch.tensor(0.0, device=device)
+            matched_count = 0
+
+            for sub_b_idx, orig_b_idx in enumerate(active_indices):
+                t_dict = kd_targets[orig_b_idx]
+                if t_dict is None or len(t_dict["labels"]) == 0:
+                    continue
+
+                t_classes = t_dict["labels"]               # (K,)
+                t_masks = t_dict["masks"].float()          # (K, H_pv, W_pv)
+                t_weights = t_dict["weights"]              # (K,)
+                K = len(t_classes)
+                Q = class_logits.shape[1]
+
+                q_class_logits = class_logits[sub_b_idx]   # (Q, C+1)
+                q_mask_logits = mask_logits[sub_b_idx]     # (Q, H_m, W_m)
+                H_m, W_m = q_mask_logits.shape[-2:]
+
+                # Downsample teacher masks to query mask resolution for matching
+                if t_masks.shape[-2:] != (H_m, W_m):
+                    t_masks_m = F.interpolate(t_masks.unsqueeze(0), size=(H_m, W_m), mode="nearest").squeeze(0)
+                else:
+                    t_masks_m = t_masks
+
+                # Cost matrix for Hungarian matching: (Q, K)
+                cost_cls = -q_class_logits.softmax(-1)[:, t_classes]
+                cost_mask = F.binary_cross_entropy_with_logits(
+                    q_mask_logits.unsqueeze(1).expand(-1, K, -1, -1),
+                    t_masks_m.unsqueeze(0).expand(Q, -1, -1, -1),
+                    reduction="none"
+                ).mean(dim=[-2, -1])
+
+                q_prob = q_mask_logits.sigmoid()
+                inter = (q_prob.unsqueeze(1) * t_masks_m.unsqueeze(0)).sum(dim=[-2, -1])
+                union = q_prob.unsqueeze(1).sum(dim=[-2, -1]) + t_masks_m.unsqueeze(0).sum(dim=[-2, -1])
+                cost_dice = 1.0 - (2.0 * inter + 1e-6) / (union + 1e-6)
+
+                total_cost = 2.0 * cost_cls + 5.0 * cost_mask + 5.0 * cost_dice
+                q_ind, k_ind = linear_sum_assignment(total_cost.detach().cpu().numpy())
+
+                m_pred_cls = q_class_logits[q_ind]
+                m_pred_mask = q_mask_logits[q_ind]
+                m_tgt_cls = t_classes[k_ind]
+                m_tgt_mask = t_masks_m[k_ind]
+                m_w = t_weights[k_ind]
+
+                loss_c = F.cross_entropy(m_pred_cls, m_tgt_cls, reduction="none")
+                loss_m = F.binary_cross_entropy_with_logits(m_pred_mask, m_tgt_mask, reduction="none").mean(dim=[-2, -1])
+                p_m = m_pred_mask.sigmoid()
+                m_inter = (p_m * m_tgt_mask).sum(dim=[-2, -1])
+                m_union = p_m.sum(dim=[-2, -1]) + m_tgt_mask.sum(dim=[-2, -1])
+                loss_d = 1.0 - (2.0 * m_inter + 1e-6) / (m_union + 1e-6)
+
+                inst_l = m_w * (loss_c + 5.0 * loss_m + 5.0 * loss_d)
+                total_kd_loss = total_kd_loss + inst_l.sum()
+                matched_count += len(q_ind)
+
+            norm_kd_loss = total_kd_loss / max(effective_mass, 1.0)
+            return norm_kd_loss, effective_mass, n_distilled, n_vetoed
+
+        # Fallback for models returning aggregate loss directly (e.g. DummyM2FStudent)
         if kd_outputs.loss is None:
             return torch.tensor(0.0, device=device, requires_grad=True), effective_mass, n_distilled, n_vetoed
 
         raw_kd_loss = kd_outputs.loss
-
-        # Scale by mean instance reliability weight
         mean_instance_weight = float(effective_mass / max(n_distilled, 1))
         norm_kd_loss = (raw_kd_loss / max(len(active_indices), 1)) * mean_instance_weight
-
         return norm_kd_loss, effective_mass, n_distilled, n_vetoed
 
     def forward(
